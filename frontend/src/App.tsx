@@ -12,12 +12,22 @@ interface Project {
   status: string;
 }
 
+interface RequirementAnalysis {
+  functional_requirements: string[];
+  non_functional_requirements: string[];
+  assumptions: string[];
+  ambiguities: string[];
+  edge_cases: string[];
+  acceptance_criteria: string[];
+}
+
 interface Requirement {
   _id: string;
   projectId: string;
   title: string;
   description: string;
   status: string;
+  analysis?: RequirementAnalysis;
 }
 
 function App() {
@@ -260,6 +270,71 @@ function App() {
                           <span className="tag status">{r.status}</span>
                         </div>
                         <p>{r.description}</p>
+                        
+                        {(r.status === 'DRAFT' || r.status === 'ANALYSIS_FAILED') && (
+                          <button className="btn-primary mt-3" onClick={async () => {
+                            setLoading(true);
+                            try {
+                              await axios.post(`${API_URL}/requirements/${r._id}/analyze`);
+                              notifySuccess("Analysis complete!");
+                              await fetchRequirements(selectedProject._id);
+                            } catch (err: any) {
+                              notifyError(err.response?.data?.detail || "Analysis failed");
+                              await fetchRequirements(selectedProject._id); // Update status to FAILED
+                            } finally {
+                              setLoading(false);
+                            }
+                          }} disabled={loading}>Analyze Requirement</button>
+                        )}
+
+                        {r.status === 'ANALYZING' && (
+                          <div className="mt-3 loader">Analyzing requirement with AI...</div>
+                        )}
+
+                        {r.analysis && (
+                          <div className="analysis-results mt-3">
+                            <h4>AI Requirement Analysis</h4>
+                            <div className="analysis-section">
+                              <h5>Functional Requirements</h5>
+                              <ul>{r.analysis.functional_requirements.map((i, idx) => <li key={idx}>{i}</li>)}</ul>
+                            </div>
+                            <div className="analysis-section">
+                              <h5>Non-Functional Requirements</h5>
+                              <ul>{r.analysis.non_functional_requirements.map((i, idx) => <li key={idx}>{i}</li>)}</ul>
+                            </div>
+                            <div className="analysis-section">
+                              <h5>Assumptions</h5>
+                              <ul>{r.analysis.assumptions.map((i, idx) => <li key={idx}>{i}</li>)}</ul>
+                            </div>
+                            <div className="analysis-section">
+                              <h5>Ambiguities</h5>
+                              <ul>{r.analysis.ambiguities.map((i, idx) => <li key={idx}>{i}</li>)}</ul>
+                            </div>
+                            <div className="analysis-section">
+                              <h5>Edge Cases</h5>
+                              <ul>{r.analysis.edge_cases.map((i, idx) => <li key={idx}>{i}</li>)}</ul>
+                            </div>
+                            <div className="analysis-section">
+                              <h5>Acceptance Criteria</h5>
+                              <ul>{r.analysis.acceptance_criteria.map((i, idx) => <li key={idx}>{i}</li>)}</ul>
+                            </div>
+
+                            {r.status === 'ANALYZED' && (
+                              <button className="btn-success mt-3" onClick={async () => {
+                                setLoading(true);
+                                try {
+                                  await axios.post(`${API_URL}/requirements/${r._id}/confirm`);
+                                  notifySuccess("Requirement confirmed!");
+                                  await fetchRequirements(selectedProject._id);
+                                } catch (err) {
+                                  notifyError("Failed to confirm requirement.");
+                                } finally {
+                                  setLoading(false);
+                                }
+                              }} disabled={loading}>Confirm Requirement</button>
+                            )}
+                          </div>
+                        )}
                       </li>
                     ))}
                   </ul>
