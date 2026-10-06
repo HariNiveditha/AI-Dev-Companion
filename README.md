@@ -1,4 +1,4 @@
-# AI Software Engineering Assistant - Phases 1, 2, and 3
+# AI-Dev-Companion - Phases 1, 2, and 3
 
 This repository contains project and requirement setup, AI requirement analysis and confirmation, and AI Java code generation for confirmed requirements.
 
