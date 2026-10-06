@@ -40,7 +40,7 @@ async def add_requirement(project_id: str, req_in: RequirementCreate):
     new_req = req_in.dict()
     new_req["_id"] = str(uuid4())
     new_req["projectId"] = project_id
-    new_req["status"] = "PENDING"
+    new_req["status"] = "DRAFT"
     await db.requirements.insert_one(new_req)
     return new_req
 

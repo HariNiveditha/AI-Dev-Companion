@@ -1,6 +1,6 @@
-# AI Software Engineering Assistant - Phase 1
+# AI Software Engineering Assistant - Phases 1, 2, and 3
 
-This repository contains Phase 1 setup for the AI Software Engineering Assistant project.
+This repository contains project and requirement setup, AI requirement analysis and confirmation, and AI Java code generation for confirmed requirements.
 
 ## Structure
 
@@ -37,8 +37,15 @@ This repository contains Phase 1 setup for the AI Software Engineering Assistant
 2.  Create a project.
 3.  Click on the newly created project in the list.
 4.  Submit a requirement.
-5.  Refresh the page and select the project again to verify the requirement is persisted.
+5. Analyze the requirement and review the AI analysis.
+6. Confirm the requirement.
+7. Generate Java code and review the generated artifacts.
+8. Refresh the page and select the project again to verify the requirement, analysis, confirmation, and artifacts are persisted.
 
-### Known Limitations (Phase 1)
+### Phase 3 Code Generation
+
+Code generation requires a requirement with status `CONFIRMED`. The frontend calls `POST /requirements/{id}/generate-code`, which sends the confirmed requirement and stored AI analysis to Gemini, validates the structured Java response, and persists each generated file as a CodeArtifact in MongoDB. Generated files and their versions are displayed in the frontend, where a developer can save an edited version without overwriting earlier artifacts.
+
+### Known Limitations
 - Currently uses Mock MongoDB (`mongomock_motor`) for testing locally without docker, as Docker wasn't available in the test environment. Real MongoDB can be used by setting `USE_MOCK_MONGO=false` and running `docker compose up -d`.
-- AI integrations and advanced features belong to later phases.
+- Phase 4 and later workflow stages are not implemented.

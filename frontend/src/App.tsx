@@ -30,6 +30,31 @@ interface Requirement {
   analysis?: RequirementAnalysis;
 }
 
+interface CodeArtifact {
+  artifact_id: string;
+  project_id: string;
+  requirement_id: string;
+  file_name: string;
+  language: 'Java';
+  content: string;
+  version: number;
+  source: 'AI_GENERATED' | 'DEVELOPER_EDITED';
+  status: 'AI_GENERATED' | 'EDITED';
+  created_at: string;
+  updated_at: string;
+}
+
+const getLatestArtifacts = (artifacts: CodeArtifact[]) => {
+  const latest = new Map<string, CodeArtifact>();
+  artifacts.forEach(artifact => {
+    const current = latest.get(artifact.file_name);
+    if (!current || artifact.version > current.version) {
+      latest.set(artifact.file_name, artifact);
+    }
+  });
+  return Array.from(latest.values());
+};
+
 function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
@@ -47,6 +72,10 @@ function App() {
   const [requirements, setRequirements] = useState<Requirement[]>([]);
   const [reqTitle, setReqTitle] = useState('');
   const [reqDesc, setReqDesc] = useState('');
+  const [artifactsByRequirement, setArtifactsByRequirement] = useState<Record<string, CodeArtifact[]>>({});
+  const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(null);
+  const [draftArtifactContent, setDraftArtifactContent] = useState('');
+  const [savingArtifact, setSavingArtifact] = useState(false);
 
   // Notifications
   const notifyError = (msg: string) => {
@@ -99,10 +128,68 @@ function App() {
     try {
       const res = await axios.get(`${API_URL}/projects/${projectId}/requirements`);
       setRequirements(res.data);
+      await Promise.all(res.data
+        .filter((requirement: Requirement) => requirement.status === 'CONFIRMED')
+        .map(async (requirement: Requirement) => {
+          const artifactRes = await axios.get(`${API_URL}/requirements/${requirement._id}/artifacts`);
+          setArtifactsByRequirement(current => ({ ...current, [requirement._id]: artifactRes.data }));
+        }));
     } catch (err) {
       notifyError("Failed to load requirements.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const generateCode = async (requirement: Requirement) => {
+    setLoading(true);
+    try {
+      const res = await axios.post(`${API_URL}/requirements/${requirement._id}/generate-code`);
+      setArtifactsByRequirement(current => ({
+        ...current,
+        [requirement._id]: [...(current[requirement._id] || []), ...res.data],
+      }));
+      notifySuccess("Java source generated successfully.");
+    } catch (err: any) {
+      if (!err.response) {
+        notifyError("Backend unavailable. Start the API and try again.");
+      } else {
+        notifyError(
+          err.response.data?.detail ||
+          `Code generation failed (HTTP ${err.response.status}).`,
+        );
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const selectArtifact = (artifact: CodeArtifact) => {
+    setSelectedArtifactId(artifact.artifact_id);
+    setDraftArtifactContent(artifact.content);
+  };
+
+  const saveArtifact = async (artifact: CodeArtifact) => {
+    if (!draftArtifactContent.trim()) {
+      notifyError("Code content cannot be empty.");
+      return;
+    }
+    setSavingArtifact(true);
+    try {
+      const res = await axios.put(`${API_URL}/artifacts/${artifact.artifact_id}`, {
+        content: draftArtifactContent,
+      });
+      setArtifactsByRequirement(current => ({
+        ...current,
+        [artifact.requirement_id]: [...(current[artifact.requirement_id] || []), res.data],
+      }));
+      setSelectedArtifactId(res.data.artifact_id);
+      setDraftArtifactContent(res.data.content);
+      notifySuccess(`Saved ${res.data.file_name} version ${res.data.version}.`);
+    } catch (err: any) {
+      notifyError(err.response?.data?.detail || "Failed to save code artifact.");
+    } finally {
+      setSavingArtifact(false);
     }
   };
 
@@ -335,6 +422,82 @@ function App() {
                             )}
                           </div>
                         )}
+
+                        {r.status === 'CONFIRMED' && (() => {
+                          const requirementArtifacts = artifactsByRequirement[r._id] || [];
+                          const latestArtifacts = getLatestArtifacts(requirementArtifacts);
+                          const selectedArtifact = requirementArtifacts.find(
+                            artifact => artifact.artifact_id === selectedArtifactId,
+                          ) || latestArtifacts[0];
+
+                          return (
+                            <div className="code-artifacts mt-3">
+                              <div className="code-artifacts-header">
+                                <h4>Generated Code</h4>
+                                <button
+                                  className="btn-primary"
+                                  onClick={() => generateCode(r)}
+                                  disabled={loading}
+                                >
+                                  Generate Code
+                                </button>
+                              </div>
+
+                              {latestArtifacts.length === 0 ? (
+                                <p className="code-empty">No generated files yet.</p>
+                              ) : (
+                                <div className="code-workspace">
+                                  <div className="code-file-list">
+                                    <h5>Files</h5>
+                                    {latestArtifacts.map(artifact => (
+                                      <button
+                                        key={artifact.file_name}
+                                        className={`code-file-button ${selectedArtifact?.file_name === artifact.file_name ? 'active' : ''}`}
+                                        onClick={() => selectArtifact(artifact)}
+                                      >
+                                        {artifact.file_name}
+                                        <span>v{artifact.version}</span>
+                                      </button>
+                                    ))}
+                                    <h5 className="version-heading">Versions</h5>
+                                    {requirementArtifacts.map(artifact => (
+                                      <button
+                                        key={artifact.artifact_id}
+                                        className="version-button"
+                                        onClick={() => selectArtifact(artifact)}
+                                      >
+                                        {artifact.file_name} v{artifact.version}
+                                      </button>
+                                    ))}
+                                  </div>
+                                  {selectedArtifact && (
+                                    <div className="code-editor">
+                                      <div className="code-editor-header">
+                                        <strong>{selectedArtifact.file_name}</strong>
+                                        <span>Version {selectedArtifact.version} · {selectedArtifact.source}</span>
+                                      </div>
+                                      <textarea
+                                        value={selectedArtifactId === selectedArtifact.artifact_id ? draftArtifactContent : selectedArtifact.content}
+                                        onChange={event => {
+                                          setSelectedArtifactId(selectedArtifact.artifact_id);
+                                          setDraftArtifactContent(event.target.value);
+                                        }}
+                                        spellCheck={false}
+                                      />
+                                      <button
+                                        className="btn-success mt-3"
+                                        onClick={() => saveArtifact(selectedArtifact)}
+                                        disabled={savingArtifact}
+                                      >
+                                        Save New Version
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </li>
                     ))}
                   </ul>
