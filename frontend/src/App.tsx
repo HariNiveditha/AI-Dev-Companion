@@ -44,6 +44,41 @@ interface CodeArtifact {
   updated_at: string;
 }
 
+interface CompileResult {
+  artifact_id: string;
+  status: 'PASSED' | 'FAILED' | 'TOOL_ERROR';
+  exit_code: number | null;
+  stdout: string;
+  stderr: string;
+  duration_ms: number;
+  timestamp: string;
+}
+
+interface AnalysisFinding {
+  tool: 'Checkstyle' | 'SpotBugs' | 'Semgrep';
+  severity: string;
+  file: string;
+  line: number | null;
+  column: number | null;
+  rule: string | null;
+  message: string;
+}
+
+interface AnalysisToolResult {
+  status: 'COMPLETED' | 'UNAVAILABLE' | 'NOT_RUN' | 'FAILED';
+  findings: AnalysisFinding[];
+}
+
+interface StaticAnalysisResult {
+  analysis_id: string;
+  artifact_id: string;
+  status: 'COMPLETED' | 'PARTIAL' | 'TOOL_ERROR';
+  checkstyle: AnalysisToolResult;
+  spotbugs: AnalysisToolResult;
+  security: AnalysisToolResult;
+  created_at: string;
+}
+
 const getLatestArtifacts = (artifacts: CodeArtifact[]) => {
   const latest = new Map<string, CodeArtifact>();
   artifacts.forEach(artifact => {
@@ -76,6 +111,10 @@ function App() {
   const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(null);
   const [draftArtifactContent, setDraftArtifactContent] = useState('');
   const [savingArtifact, setSavingArtifact] = useState(false);
+  const [compilingArtifactId, setCompilingArtifactId] = useState<string | null>(null);
+  const [compileResults, setCompileResults] = useState<Record<string, CompileResult>>({});
+  const [analyzingArtifactId, setAnalyzingArtifactId] = useState<string | null>(null);
+  const [analysisResults, setAnalysisResults] = useState<Record<string, StaticAnalysisResult>>({});
 
   // Notifications
   const notifyError = (msg: string) => {
@@ -190,6 +229,48 @@ function App() {
       notifyError(err.response?.data?.detail || "Failed to save code artifact.");
     } finally {
       setSavingArtifact(false);
+    }
+  };
+
+  const compileArtifact = async (artifact: CodeArtifact) => {
+    setCompilingArtifactId(artifact.artifact_id);
+    try {
+      const res = await axios.post(`${API_URL}/artifacts/${artifact.artifact_id}/compile`);
+      setCompileResults(current => ({ ...current, [artifact.artifact_id]: res.data }));
+      if (res.data.status === 'PASSED') {
+        notifySuccess(`BUILD PASSED in ${res.data.duration_ms} ms.`);
+      } else {
+        notifyError(`BUILD ${res.data.status}: ${res.data.stderr || 'See compiler output below.'}`);
+      }
+    } catch (err: any) {
+      if (err.response?.data?.status) {
+        const result = err.response.data as CompileResult;
+        setCompileResults(current => ({ ...current, [artifact.artifact_id]: result }));
+        notifyError(result.stderr || `Compilation tool error (HTTP ${err.response.status}).`);
+      } else if (!err.response) {
+        notifyError("Backend unavailable. Start the API and try again.");
+      } else {
+        notifyError(err.response.data?.detail || `Compilation failed (HTTP ${err.response.status}).`);
+      }
+    } finally {
+      setCompilingArtifactId(null);
+    }
+  };
+
+  const analyzeArtifact = async (artifact: CodeArtifact) => {
+    setAnalyzingArtifactId(artifact.artifact_id);
+    try {
+      const res = await axios.post(`${API_URL}/artifacts/${artifact.artifact_id}/analyze`);
+      setAnalysisResults(current => ({ ...current, [artifact.artifact_id]: res.data }));
+      notifySuccess("Static and security analysis completed.");
+    } catch (err: any) {
+      if (!err.response) {
+        notifyError("Backend unavailable. Start the API and try again.");
+      } else {
+        notifyError(err.response.data?.detail || `Analysis failed (HTTP ${err.response.status}).`);
+      }
+    } finally {
+      setAnalyzingArtifactId(null);
     }
   };
 
@@ -491,6 +572,59 @@ function App() {
                                       >
                                         Save New Version
                                       </button>
+                                      <button
+                                        className="btn-primary mt-3 compile-button"
+                                        onClick={() => compileArtifact(selectedArtifact)}
+                                        disabled={compilingArtifactId === selectedArtifact.artifact_id}
+                                      >
+                                        {compilingArtifactId === selectedArtifact.artifact_id ? 'Compiling...' : 'Compile'}
+                                      </button>
+                                      {compileResults[selectedArtifact.artifact_id] && (
+                                        <div className={`compile-result ${compileResults[selectedArtifact.artifact_id].status.toLowerCase()}`}>
+                                          <strong>BUILD {compileResults[selectedArtifact.artifact_id].status}</strong>
+                                          <span>Exit Code: {compileResults[selectedArtifact.artifact_id].exit_code ?? 'N/A'}</span>
+                                          <span>Compilation Time: {compileResults[selectedArtifact.artifact_id].duration_ms} ms</span>
+                                          {compileResults[selectedArtifact.artifact_id].stdout && (
+                                            <pre>{compileResults[selectedArtifact.artifact_id].stdout}</pre>
+                                          )}
+                                          {compileResults[selectedArtifact.artifact_id].stderr && (
+                                            <pre>{compileResults[selectedArtifact.artifact_id].stderr}</pre>
+                                          )}
+                                        </div>
+                                      )}
+                                      <button
+                                        className="btn-primary mt-3"
+                                        onClick={() => analyzeArtifact(selectedArtifact)}
+                                        disabled={analyzingArtifactId === selectedArtifact.artifact_id}
+                                      >
+                                        {analyzingArtifactId === selectedArtifact.artifact_id ? 'Analyzing...' : 'Run Static Analysis'}
+                                      </button>
+                                      {analysisResults[selectedArtifact.artifact_id] && (
+                                        <div className="analysis-tools-result">
+                                          <h5>Static Analysis</h5>
+                                          <span>Overall status: {analysisResults[selectedArtifact.artifact_id].status}</span>
+                                          {([
+                                            ['Checkstyle', analysisResults[selectedArtifact.artifact_id].checkstyle],
+                                            ['SpotBugs', analysisResults[selectedArtifact.artifact_id].spotbugs],
+                                            ['Security', analysisResults[selectedArtifact.artifact_id].security],
+                                          ] as [string, AnalysisToolResult][]).map(([label, toolResult]) => (
+                                            <div className="analysis-tool-group" key={label}>
+                                              <div className="analysis-tool-heading">
+                                                <strong>{label}</strong>
+                                                <span>{toolResult.status} · {toolResult.findings.length} findings</span>
+                                              </div>
+                                              {toolResult.findings.map((finding, index) => (
+                                                <div className="analysis-finding" key={`${finding.tool}-${finding.file}-${finding.line}-${index}`}>
+                                                  <strong>{finding.severity}</strong>
+                                                  <span>{finding.file}:{finding.line ?? 'n/a'}{finding.column ? `:${finding.column}` : ''}</span>
+                                                  <span>{finding.rule || finding.tool}</span>
+                                                  <p>{finding.message}</p>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
                                     </div>
                                   )}
                                 </div>
