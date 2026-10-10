@@ -771,3 +771,216 @@ body {
   resize: vertical;
   white-space: pre-wrap;
 }
+
+/* ===== AI Code Improvement Section ===== */
+
+.improvement-section {
+  margin-top: 24px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+
+.improvement-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.improvement-header h4 {
+  color: var(--primary);
+  margin: 0;
+}
+
+.improvement-proposal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+}
+
+.improvement-proposal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.improvement-proposal-header h5 {
+  margin: 0;
+  color: var(--text-main);
+}
+
+.improvement-explanation {
+  margin-bottom: 16px;
+}
+
+.improvement-explanation h6 {
+  margin-bottom: 8px;
+  color: var(--text-main);
+  font-size: 0.9rem;
+}
+
+.improvement-explanation p {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.improvement-findings {
+  margin-bottom: 16px;
+}
+
+.improvement-findings h6 {
+  margin-bottom: 8px;
+  color: var(--text-main);
+  font-size: 0.9rem;
+}
+
+.improvement-findings ul {
+  padding-left: 20px;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.improvement-findings li {
+  margin-bottom: 4px;
+}
+
+.improvement-findings.non-actionable {
+  opacity: 0.8;
+}
+
+.improvement-diff {
+  margin-bottom: 16px;
+}
+
+.improvement-diff h6 {
+  margin-bottom: 8px;
+  color: var(--text-main);
+  font-size: 0.9rem;
+}
+
+.diff-view {
+  max-height: 300px;
+  overflow: auto;
+  padding: 12px;
+  background: #1e1e2e;
+  color: #cdd6f4;
+  border-radius: 6px;
+  font-family: "JetBrains Mono", "Fira Code", Consolas, monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.improvement-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.improvement-verification {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-soft);
+}
+
+.improvement-verification h6 {
+  margin-bottom: 12px;
+  color: var(--text-main);
+}
+
+.improvement-comparison {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-soft);
+}
+
+.improvement-comparison h6 {
+  margin-bottom: 12px;
+  color: var(--text-main);
+}
+
+.comparison-summary {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.comparison-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  text-align: center;
+}
+
+.comparison-metric span {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.comparison-metric strong {
+  font-size: 1.2rem;
+  color: var(--text-main);
+}
+
+.comparison-section {
+  margin-top: 12px;
+}
+
+.comparison-section h6 {
+  margin-bottom: 8px;
+  color: var(--text-main);
+  font-size: 0.85rem;
+}
+
+.comparison-section ul {
+  padding-left: 20px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.comparison-section li {
+  margin-bottom: 4px;
+}
+
+.comparison-resolved {
+  color: var(--success);
+}
+
+.comparison-remaining {
+  color: var(--warning);
+}
+
+.comparison-new {
+  color: var(--danger);
+}
+
+@media (max-width: 768px) {
+  .comparison-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .improvement-actions {
+    flex-direction: column;
+  }
+
+  .improvement-actions button {
+    width: 100%;
+  }
+}

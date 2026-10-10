@@ -145,6 +145,47 @@ interface DocumentationRecord {
   updated_at: string;
 }
 
+interface ImprovementProposal {
+  proposal_id: string;
+  artifact_id: string;
+  project_id: string;
+  requirement_id: string;
+  file_name: string;
+  original_content: string;
+  improved_content: string;
+  explanation: string;
+  findings_addressed: AnalysisFinding[];
+  non_actionable_findings: AnalysisFinding[];
+  status: 'PENDING' | 'ACCEPTED' | 'REJECTED';
+  compile_result: CompileResult | null;
+  after_analysis: StaticAnalysisResult | null;
+  accepted_artifact_id: string | null;
+  accepted_version: number | null;
+  created_at: string;
+  updated_at: string;
+  accepted_at: string | null;
+  rejected_at: string | null;
+}
+
+interface ImprovementComparison {
+  proposal_id: string;
+  original_artifact_id: string;
+  original_version: number;
+  improved_artifact_id: string | null;
+  improved_version: number | null;
+  original_analysis: StaticAnalysisResult | null;
+  improved_analysis: StaticAnalysisResult | null;
+  original_compile_status: string | null;
+  improved_compile_status: string | null;
+  findings_resolved: AnalysisFinding[];
+  findings_remaining: AnalysisFinding[];
+  findings_new: AnalysisFinding[];
+  findings_unmatched: AnalysisFinding[];
+  total_before: number;
+  total_after: number;
+  created_at: string;
+}
+
 const getLatestArtifacts = (artifacts: CodeArtifact[]) => {
   const latest = new Map<string, CodeArtifact>();
   artifacts.forEach(artifact => {
@@ -196,6 +237,15 @@ function App() {
   const [generatedDocumentation, setGeneratedDocumentation] =
     useState<DocumentationRecord | null>(null);
   const [documentationLoading, setDocumentationLoading] = useState(false);
+
+  // AI Code Improvement
+  const [improvementProposal, setImprovementProposal] = useState<ImprovementProposal | null>(null);
+  const [improvementLoading, setImprovementLoading] = useState(false);
+  const [improvementError, setImprovementError] = useState<string | null>(null);
+  const [improvementDiff, setImprovementDiff] = useState<string>('');
+  const [improvementComparison, setImprovementComparison] = useState<ImprovementComparison | null>(null);
+  const [acceptingProposal, setAcceptingProposal] = useState(false);
+  const [rejectingProposal, setRejectingProposal] = useState(false);
 
   // Notifications
   const notifyError = (msg: string) => {
@@ -520,6 +570,98 @@ function App() {
       );
     } finally {
       setDocumentationLoading(false);
+    }
+  };
+
+  const generateImprovement = async (artifact: CodeArtifact) => {
+    setImprovementLoading(true);
+    setImprovementError(null);
+    setImprovementProposal(null);
+    setImprovementDiff('');
+    setImprovementComparison(null);
+
+    try {
+      const response = await axios.post(
+        `${API_URL}/improvements/generate?artifact_id=${artifact.artifact_id}`
+      );
+      const proposal: ImprovementProposal = response.data;
+      setImprovementProposal(proposal);
+
+      // Fetch the diff
+      const diffResponse = await axios.get(
+        `${API_URL}/improvements/${proposal.proposal_id}/diff`
+      );
+      setImprovementDiff(diffResponse.data.diff);
+
+      notifySuccess('Improvement proposal generated successfully.');
+    } catch (err: any) {
+      if (!err.response) {
+        notifyError('Backend unavailable. Start the API and try again.');
+      } else {
+        notifyError(
+          err.response.data?.detail ||
+            `Improvement generation failed (HTTP ${err.response.status}).`
+        );
+      }
+    } finally {
+      setImprovementLoading(false);
+    }
+  };
+
+  const acceptProposal = async (proposal: ImprovementProposal) => {
+    setAcceptingProposal(true);
+    setImprovementError(null);
+
+    try {
+      const response = await axios.post(
+        `${API_URL}/improvements/${proposal.proposal_id}/accept`
+      );
+      const updatedProposal: ImprovementProposal = response.data;
+      setImprovementProposal(updatedProposal);
+
+      // Fetch comparison
+      const comparisonResponse = await axios.get(
+        `${API_URL}/improvements/${proposal.proposal_id}/comparison`
+      );
+      setImprovementComparison(comparisonResponse.data);
+
+      notifySuccess('Changes accepted. New artifact version created and verified.');
+    } catch (err: any) {
+      if (!err.response) {
+        notifyError('Backend unavailable. Start the API and try again.');
+      } else {
+        notifyError(
+          err.response.data?.detail ||
+            `Accept failed (HTTP ${err.response.status}).`
+        );
+      }
+    } finally {
+      setAcceptingProposal(false);
+    }
+  };
+
+  const rejectProposal = async (proposal: ImprovementProposal) => {
+    setRejectingProposal(true);
+    setImprovementError(null);
+
+    try {
+      const response = await axios.post(
+        `${API_URL}/improvements/${proposal.proposal_id}/reject`
+      );
+      const updatedProposal: ImprovementProposal = response.data;
+      setImprovementProposal(updatedProposal);
+      notifySuccess('Proposal rejected. Original artifact preserved.');
+    } catch (err: any) {
+      if (!err.response) {
+        notifyError('Backend unavailable. Start the API and try again.');
+      } else {
+        notifyError(
+          err.response.data?.detail ||
+            `Reject failed (HTTP ${err.response.status}).`
+        );
+      }
+    } finally {
+      setRejectingProposal(false);
     }
   };
 
@@ -1182,6 +1324,177 @@ function App() {
                                               ))}
                                             </div>
                                           ))}
+                                        </div>
+                                      )}
+
+                                      {/* AI Code Improvement Section */}
+                                      {analysisResults[selectedArtifact.artifact_id] && (
+                                        <div className="improvement-section mt-4">
+                                          <div className="improvement-header">
+                                            <h4>AI Code Improvement</h4>
+                                            <button
+                                              className="btn-primary"
+                                              onClick={() => generateImprovement(selectedArtifact)}
+                                              disabled={improvementLoading}
+                                            >
+                                              {improvementLoading ? 'Generating...' : 'Generate Improved Code'}
+                                            </button>
+                                          </div>
+
+                                          {improvementError && (
+                                            <div className="alert error mt-3">{improvementError}</div>
+                                          )}
+
+                                          {improvementProposal && (
+                                            <div className="improvement-proposal mt-3">
+                                              <div className="improvement-proposal-header">
+                                                <h5>Improvement Proposal</h5>
+                                                <span className={`tag status ${improvementProposal.status.toLowerCase()}`}>
+                                                  {improvementProposal.status}
+                                                </span>
+                                              </div>
+
+                                              <div className="improvement-explanation">
+                                                <h6>AI Explanation</h6>
+                                                <p>{improvementProposal.explanation}</p>
+                                              </div>
+
+                                              {improvementProposal.findings_addressed.length > 0 && (
+                                                <div className="improvement-findings">
+                                                  <h6>Findings Addressed</h6>
+                                                  <ul>
+                                                    {improvementProposal.findings_addressed.map((finding, idx) => (
+                                                      <li key={idx}>
+                                                        <strong>{finding.tool}</strong> - {finding.rule || finding.file}:{finding.line ?? 'n/a'} - {finding.message}
+                                                      </li>
+                                                    ))}
+                                                  </ul>
+                                                </div>
+                                              )}
+
+                                              {improvementProposal.non_actionable_findings.length > 0 && (
+                                                <div className="improvement-findings non-actionable">
+                                                  <h6>Non-Actionable Findings</h6>
+                                                  <ul>
+                                                    {improvementProposal.non_actionable_findings.map((finding, idx) => (
+                                                      <li key={idx}>
+                                                        <strong>{finding.tool}</strong> - {finding.rule || finding.file}:{finding.line ?? 'n/a'} - {finding.message}
+                                                      </li>
+                                                    ))}
+                                                  </ul>
+                                                </div>
+                                              )}
+
+                                              {improvementDiff && (
+                                                <div className="improvement-diff">
+                                                  <h6>Code Diff</h6>
+                                                  <pre className="diff-view">{improvementDiff}</pre>
+                                                </div>
+                                              )}
+
+                                              {improvementProposal.status === 'PENDING' && (
+                                                <div className="improvement-actions">
+                                                  <button
+                                                    className="btn-success"
+                                                    onClick={() => acceptProposal(improvementProposal)}
+                                                    disabled={acceptingProposal}
+                                                  >
+                                                    {acceptingProposal ? 'Accepting...' : 'Accept Changes'}
+                                                  </button>
+                                                  <button
+                                                    className="btn-secondary"
+                                                    onClick={() => rejectProposal(improvementProposal)}
+                                                    disabled={rejectingProposal}
+                                                  >
+                                                    {rejectingProposal ? 'Rejecting...' : 'Reject Changes'}
+                                                  </button>
+                                                </div>
+                                              )}
+
+                                              {improvementProposal.status === 'ACCEPTED' && improvementProposal.compile_result && (
+                                                <div className="improvement-verification">
+                                                  <h6>Verification Results</h6>
+                                                  <div className={`compile-result ${improvementProposal.compile_result.status.toLowerCase()}`}>
+                                                    <strong>BUILD {improvementProposal.compile_result.status}</strong>
+                                                    <span>Exit Code: {improvementProposal.compile_result.exit_code ?? 'N/A'}</span>
+                                                    <span>Compilation Time: {improvementProposal.compile_result.duration_ms} ms</span>
+                                                  </div>
+                                                  {improvementProposal.accepted_artifact_id && (
+                                                    <p className="mt-2">
+                                                      <strong>New Version:</strong> Artifact ID: {improvementProposal.accepted_artifact_id}, Version: {improvementProposal.accepted_version}
+                                                    </p>
+                                                  )}
+                                                </div>
+                                              )}
+
+                                              {improvementComparison && (
+                                                <div className="improvement-comparison">
+                                                  <h6>Before &amp; After Comparison</h6>
+                                                  <div className="comparison-summary">
+                                                    <div className="comparison-metric">
+                                                      <span>Findings Before</span>
+                                                      <strong>{improvementComparison.total_before}</strong>
+                                                    </div>
+                                                    <div className="comparison-metric">
+                                                      <span>Findings After</span>
+                                                      <strong>{improvementComparison.total_after}</strong>
+                                                    </div>
+                                                    <div className="comparison-metric">
+                                                      <span>Resolved</span>
+                                                      <strong>{improvementComparison.findings_resolved.length}</strong>
+                                                    </div>
+                                                    <div className="comparison-metric">
+                                                      <span>Remaining</span>
+                                                      <strong>{improvementComparison.findings_remaining.length}</strong>
+                                                    </div>
+                                                    <div className="comparison-metric">
+                                                      <span>New</span>
+                                                      <strong>{improvementComparison.findings_new.length}</strong>
+                                                    </div>
+                                                  </div>
+
+                                                  {improvementComparison.findings_resolved.length > 0 && (
+                                                    <div className="comparison-section">
+                                                      <h6>Resolved Findings</h6>
+                                                      <ul>
+                                                        {improvementComparison.findings_resolved.map((finding, idx) => (
+                                                          <li key={idx} className="comparison-resolved">
+                                                            <strong>{finding.tool}</strong> - {finding.rule || finding.file} - {finding.message}
+                                                          </li>
+                                                        ))}
+                                                      </ul>
+                                                    </div>
+                                                  )}
+
+                                                  {improvementComparison.findings_remaining.length > 0 && (
+                                                    <div className="comparison-section">
+                                                      <h6>Remaining Findings</h6>
+                                                      <ul>
+                                                        {improvementComparison.findings_remaining.map((finding, idx) => (
+                                                          <li key={idx} className="comparison-remaining">
+                                                            <strong>{finding.tool}</strong> - {finding.rule || finding.file} - {finding.message}
+                                                          </li>
+                                                        ))}
+                                                      </ul>
+                                                    </div>
+                                                  )}
+
+                                                  {improvementComparison.findings_new.length > 0 && (
+                                                    <div className="comparison-section">
+                                                      <h6>New Findings</h6>
+                                                      <ul>
+                                                        {improvementComparison.findings_new.map((finding, idx) => (
+                                                          <li key={idx} className="comparison-new">
+                                                            <strong>{finding.tool}</strong> - {finding.rule || finding.file} - {finding.message}
+                                                          </li>
+                                                        ))}
+                                                      </ul>
+                                                    </div>
+                                                  )}
+                                                </div>
+                                              )}
+                                            </div>
+                                          )}
                                         </div>
                                       )}
                                     </div>

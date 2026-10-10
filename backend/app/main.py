@@ -13,6 +13,7 @@ from app.api.artifacts import router as artifacts_router
 from app.api.executions import router as executions_router
 from app.api.reports import router as reports_router
 from app.api.documentation import router as documentation_router
+from app.api.improvement import router as improvement_router
 
 # Database connection
 from app.db.mongodb import connect_to_mongo, close_mongo_connection
@@ -50,6 +51,7 @@ app.include_router(artifacts_router, prefix="/artifacts", tags=["Code Artifacts"
 app.include_router(executions_router, tags=["Executions"])
 app.include_router(reports_router)
 app.include_router(documentation_router)
+app.include_router(improvement_router)
 
 
 @app.get("/", tags=["Health"])
