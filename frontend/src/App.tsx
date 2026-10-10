@@ -44,6 +44,18 @@ interface CodeArtifact {
   updated_at: string;
 }
 
+interface TestCase {
+  test_case_id: string;
+  requirement_id: string;
+  title: string;
+  description: string;
+  input: string;
+  expected_output: string;
+  priority: string;
+  type: string;
+  created_at: string;
+}
+
 interface CompileResult {
   artifact_id: string;
   status: 'PASSED' | 'FAILED' | 'TOOL_ERROR';
@@ -115,6 +127,8 @@ function App() {
   const [compileResults, setCompileResults] = useState<Record<string, CompileResult>>({});
   const [analyzingArtifactId, setAnalyzingArtifactId] = useState<string | null>(null);
   const [analysisResults, setAnalysisResults] = useState<Record<string, StaticAnalysisResult>>({});
+  const [generatingTestCasesId, setGeneratingTestCasesId] = useState<string | null>(null);
+  const [testCasesByRequirement, setTestCasesByRequirement] = useState<Record<string, TestCase[]>>({});
 
   // Notifications
   const notifyError = (msg: string) => {
@@ -271,6 +285,31 @@ function App() {
       }
     } finally {
       setAnalyzingArtifactId(null);
+    }
+  };
+
+  const generateTestCases = async (requirement: Requirement) => {
+    if (requirement.status !== 'CONFIRMED') {
+      notifyError("Requirement must be confirmed before generating test cases.");
+      return;
+    }
+
+    setGeneratingTestCasesId(requirement._id);
+    try {
+      const res = await axios.post(`${API_URL}/requirements/${requirement._id}/generate-test-cases`);
+      setTestCasesByRequirement(current => ({
+        ...current,
+        [requirement._id]: res.data,
+      }));
+      notifySuccess("Test cases generated successfully.");
+    } catch (err: any) {
+      if (!err.response) {
+        notifyError("Backend unavailable. Start the API and try again.");
+      } else {
+        notifyError(err.response.data?.detail || `Test case generation failed (HTTP ${err.response.status}).`);
+      }
+    } finally {
+      setGeneratingTestCasesId(null);
     }
   };
 
@@ -510,19 +549,61 @@ function App() {
                           const selectedArtifact = requirementArtifacts.find(
                             artifact => artifact.artifact_id === selectedArtifactId,
                           ) || latestArtifacts[0];
+                          const generatedTestCases = testCasesByRequirement[r._id] || [];
 
                           return (
                             <div className="code-artifacts mt-3">
                               <div className="code-artifacts-header">
                                 <h4>Generated Code</h4>
-                                <button
-                                  className="btn-primary"
-                                  onClick={() => generateCode(r)}
-                                  disabled={loading}
-                                >
-                                  Generate Code
-                                </button>
+                                <div className="action-group">
+                                  <button
+                                    className="btn-primary"
+                                    onClick={() => generateCode(r)}
+                                    disabled={loading}
+                                  >
+                                    Generate Code
+                                  </button>
+                                  <button
+                                    className="btn-success"
+                                    onClick={() => generateTestCases(r)}
+                                    disabled={loading || generatingTestCasesId === r._id}
+                                  >
+                                    {generatingTestCasesId === r._id ? 'Generating Test Cases...' : 'Generate Test Cases'}
+                                  </button>
+                                </div>
                               </div>
+
+                              {generatedTestCases.length > 0 && (
+                                <div className="test-cases-panel">
+                                  <h4>AI Generated Test Cases</h4>
+                                  <div className="test-cases-table-wrap">
+                                    <table className="test-case-table">
+                                      <thead>
+                                        <tr>
+                                          <th>Title</th>
+                                          <th>Description</th>
+                                          <th>Input</th>
+                                          <th>Expected Output</th>
+                                          <th>Priority</th>
+                                          <th>Type</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {generatedTestCases.map(testCase => (
+                                          <tr key={testCase.test_case_id}>
+                                            <td>{testCase.title}</td>
+                                            <td>{testCase.description}</td>
+                                            <td>{testCase.input}</td>
+                                            <td>{testCase.expected_output}</td>
+                                            <td><span className="tag test-priority">{testCase.priority}</span></td>
+                                            <td><span className="tag test-type">{testCase.type}</span></td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </div>
+                              )}
 
                               {latestArtifacts.length === 0 ? (
                                 <p className="code-empty">No generated files yet.</p>
