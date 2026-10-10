@@ -7,7 +7,12 @@ from pydantic import ValidationError
 from app.db.mongodb import get_db
 from app.models.code_artifact import CodeArtifact
 from app.models.requirement import Requirement, RequirementAnalysis
-from app.services.ai.service import analyze_requirement_text, generate_java_code
+from app.models.test_case import TestCase
+from app.services.ai.service import (
+    analyze_requirement_text,
+    generate_java_code,
+    generate_test_cases,
+)
 
 router = APIRouter()
 
@@ -151,6 +156,92 @@ async def generate_code(requirement_id: str):
 
     await db.code_artifacts.insert_many(artifacts)
     return artifacts
+
+
+@router.post("/{requirement_id}/generate-test-cases", response_model=list[TestCase])
+async def generate_requirement_test_cases(requirement_id: str):
+    db = get_db()
+    req_data = await db.requirements.find_one({"_id": requirement_id})
+    if not req_data:
+        raise HTTPException(status_code=404, detail="Requirement not found")
+
+    if req_data.get("status") != "CONFIRMED":
+        raise HTTPException(
+            status_code=409,
+            detail="Requirement must be confirmed before test case generation",
+        )
+
+    try:
+        analysis = RequirementAnalysis.model_validate(req_data.get("analysis"))
+    except (ValidationError, TypeError, ValueError):
+        raise HTTPException(
+            status_code=409,
+            detail="Requirement must have a valid AI analysis before test case generation",
+        )
+
+    try:
+        generated = generate_test_cases(
+            req_data["title"], req_data["description"], analysis
+        )
+    except ValueError:
+        raise HTTPException(
+            status_code=503,
+            detail="AI test case generation is not configured",
+        )
+    except RuntimeError:
+        raise HTTPException(
+            status_code=502,
+            detail="AI test case generation failed",
+        )
+
+    if not generated.test_cases:
+        raise HTTPException(
+            status_code=502,
+            detail="AI returned no valid test cases",
+        )
+
+    allowed_priorities = {"HIGH", "MEDIUM", "LOW"}
+    allowed_types = {"FUNCTIONAL", "NEGATIVE", "EDGE_CASE", "SECURITY", "VALIDATION"}
+
+    now = datetime.utcnow()
+    test_cases = []
+    for item in generated.test_cases:
+        if not item.title or not item.description or not item.input or not item.expected_output:
+            raise HTTPException(
+                status_code=502,
+                detail="AI returned incomplete test case data",
+            )
+
+        priority = item.priority.upper()
+        case_type = item.type.upper()
+        if priority not in allowed_priorities or case_type not in allowed_types:
+            raise HTTPException(
+                status_code=502,
+                detail="AI returned invalid test case priority or type",
+            )
+
+        test_case = TestCase(
+            test_case_id=str(uuid4()),
+            requirement_id=requirement_id,
+            title=item.title,
+            description=item.description,
+            input=item.input,
+            expected_output=item.expected_output,
+            priority=priority,
+            type=case_type,
+            created_at=now,
+        )
+        test_cases.append(test_case.model_dump())
+
+    try:
+        await db.test_cases.insert_many(test_cases)
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to save generated test cases",
+        )
+
+    return test_cases
 
 
 @router.get("/{requirement_id}/artifacts", response_model=list[CodeArtifact])

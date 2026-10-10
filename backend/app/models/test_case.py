@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import List
 
 from pydantic import BaseModel
 
@@ -23,3 +24,16 @@ class TestCaseCreate(BaseModel):
     expected_output: str
     priority: str
     type: str
+
+
+class TestCaseDraft(BaseModel):
+    title: str
+    description: str
+    input: str
+    expected_output: str
+    priority: str
+    type: str
+
+
+class TestCaseGenerationResponse(BaseModel):
+    test_cases: List[TestCaseDraft]
