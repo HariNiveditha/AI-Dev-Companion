@@ -44,6 +44,18 @@ interface CodeArtifact {
   updated_at: string;
 }
 
+interface TestCase {
+  test_case_id: string;
+  requirement_id: string;
+  title: string;
+  description: string;
+  input: string;
+  expected_output: string;
+  priority: string;
+  type: string;
+  created_at: string;
+}
+
 interface CompileResult {
   artifact_id: string;
   status: 'PASSED' | 'FAILED' | 'TOOL_ERROR';
@@ -77,6 +89,35 @@ interface StaticAnalysisResult {
   spotbugs: AnalysisToolResult;
   security: AnalysisToolResult;
   created_at: string;
+}
+
+interface ExecutionTestResult {
+  test_id: string;
+  title: string;
+  status: 'PASSED' | 'FAILED' | 'ERROR' | 'SKIPPED';
+  expected_output: string | null;
+  actual_output: string | null;
+  error_details: string | null;
+  duration_ms: number | null;
+}
+
+interface ExecutionRun {
+  execution_id: string;
+  requirement_id: string;
+  project_id: string;
+  artifact: {
+    artifact_id: string;
+    project_id: string;
+    requirement_id: string;
+    file_name: string;
+    version: number;
+    source: 'AI_GENERATED' | 'DEVELOPER_EDITED' | null;
+  };
+  status: 'PENDING' | 'RUNNING' | 'PASSED' | 'FAILED' | 'ERROR' | 'SKIPPED' | 'CANCELLED' | 'DISABLED';
+  created_at: string;
+  updated_at: string;
+  test_results: ExecutionTestResult[];
+  error_message: string | null;
 }
 
 const getLatestArtifacts = (artifacts: CodeArtifact[]) => {
@@ -115,6 +156,10 @@ function App() {
   const [compileResults, setCompileResults] = useState<Record<string, CompileResult>>({});
   const [analyzingArtifactId, setAnalyzingArtifactId] = useState<string | null>(null);
   const [analysisResults, setAnalysisResults] = useState<Record<string, StaticAnalysisResult>>({});
+  const [generatingTestCasesId, setGeneratingTestCasesId] = useState<string | null>(null);
+  const [testCasesByRequirement, setTestCasesByRequirement] = useState<Record<string, TestCase[]>>({});
+  const [executionRunsByRequirement, setExecutionRunsByRequirement] = useState<Record<string, ExecutionRun[]>>({});
+  const [startingExecutionId, setStartingExecutionId] = useState<string | null>(null);
 
   // Notifications
   const notifyError = (msg: string) => {
@@ -172,6 +217,12 @@ function App() {
         .map(async (requirement: Requirement) => {
           const artifactRes = await axios.get(`${API_URL}/requirements/${requirement._id}/artifacts`);
           setArtifactsByRequirement(current => ({ ...current, [requirement._id]: artifactRes.data }));
+          try {
+            const executionRes = await axios.get(`${API_URL}/requirements/${requirement._id}/executions`);
+            setExecutionRunsByRequirement(current => ({ ...current, [requirement._id]: executionRes.data }));
+          } catch {
+            setExecutionRunsByRequirement(current => ({ ...current, [requirement._id]: [] }));
+          }
         }));
     } catch (err) {
       notifyError("Failed to load requirements.");
@@ -271,6 +322,66 @@ function App() {
       }
     } finally {
       setAnalyzingArtifactId(null);
+    }
+  };
+
+  const generateTestCases = async (requirement: Requirement) => {
+    if (requirement.status !== 'CONFIRMED') {
+      notifyError("Requirement must be confirmed before generating test cases.");
+      return;
+    }
+
+    setGeneratingTestCasesId(requirement._id);
+    try {
+      const res = await axios.post(`${API_URL}/requirements/${requirement._id}/generate-test-cases`);
+      setTestCasesByRequirement(current => ({
+        ...current,
+        [requirement._id]: res.data,
+      }));
+      notifySuccess("Test cases generated successfully.");
+    } catch (err: any) {
+      if (!err.response) {
+        notifyError("Backend unavailable. Start the API and try again.");
+      } else {
+        notifyError(err.response.data?.detail || `Test case generation failed (HTTP ${err.response.status}).`);
+      }
+    } finally {
+      setGeneratingTestCasesId(null);
+    }
+  };
+
+  const startExecution = async (requirement: Requirement) => {
+    const latestArtifacts = artifactsByRequirement[requirement._id] || [];
+    const latestArtifact = getLatestArtifacts(latestArtifacts)[0];
+    if (!latestArtifact) {
+      notifyError("Generate and save a Java artifact before starting an execution run.");
+      return;
+    }
+
+    setStartingExecutionId(requirement._id);
+    try {
+      const res = await axios.post(`${API_URL}/requirements/${requirement._id}/executions`, {
+        artifact_id: latestArtifact.artifact_id,
+        test_case_ids: (testCasesByRequirement[requirement._id] || []).map(testCase => testCase.test_case_id),
+      });
+      setExecutionRunsByRequirement(current => ({
+        ...current,
+        [requirement._id]: [res.data, ...(current[requirement._id] || [])],
+      }));
+
+      if (res.data.status === 'DISABLED') {
+        notifyError(res.data.error_message || 'Java/JUnit execution is disabled until a secure sandbox is configured.');
+      } else {
+        notifySuccess('Execution run started.');
+      }
+    } catch (err: any) {
+      if (!err.response) {
+        notifyError('Backend unavailable. Start the API and try again.');
+      } else {
+        notifyError(err.response.data?.detail || `Execution start failed (HTTP ${err.response.status}).`);
+      }
+    } finally {
+      setStartingExecutionId(null);
     }
   };
 
@@ -510,18 +621,117 @@ function App() {
                           const selectedArtifact = requirementArtifacts.find(
                             artifact => artifact.artifact_id === selectedArtifactId,
                           ) || latestArtifacts[0];
+                          const generatedTestCases = testCasesByRequirement[r._id] || [];
+                          const executionRuns = executionRunsByRequirement[r._id] || [];
 
                           return (
                             <div className="code-artifacts mt-3">
                               <div className="code-artifacts-header">
                                 <h4>Generated Code</h4>
-                                <button
-                                  className="btn-primary"
-                                  onClick={() => generateCode(r)}
-                                  disabled={loading}
-                                >
-                                  Generate Code
-                                </button>
+                                <div className="action-group">
+                                  <button
+                                    className="btn-primary"
+                                    onClick={() => generateCode(r)}
+                                    disabled={loading}
+                                  >
+                                    Generate Code
+                                  </button>
+                                  <button
+                                    className="btn-success"
+                                    onClick={() => generateTestCases(r)}
+                                    disabled={loading || generatingTestCasesId === r._id}
+                                  >
+                                    {generatingTestCasesId === r._id ? 'Generating Test Cases...' : 'Generate Test Cases'}
+                                  </button>
+                                </div>
+                              </div>
+
+                              {generatedTestCases.length > 0 && (
+                                <div className="test-cases-panel">
+                                  <h4>AI Generated Test Cases</h4>
+                                  <div className="test-cases-table-wrap">
+                                    <table className="test-case-table">
+                                      <thead>
+                                        <tr>
+                                          <th>Title</th>
+                                          <th>Description</th>
+                                          <th>Input</th>
+                                          <th>Expected Output</th>
+                                          <th>Priority</th>
+                                          <th>Type</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {generatedTestCases.map(testCase => (
+                                          <tr key={testCase.test_case_id}>
+                                            <td>{testCase.title}</td>
+                                            <td>{testCase.description}</td>
+                                            <td>{testCase.input}</td>
+                                            <td>{testCase.expected_output}</td>
+                                            <td><span className="tag test-priority">{testCase.priority}</span></td>
+                                            <td><span className="tag test-type">{testCase.type}</span></td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </div>
+                              )}
+
+                              <div className="execution-panel mt-4">
+                                <div className="code-artifacts-header">
+                                  <h4>Execution Runs</h4>
+                                  <button
+                                    className="btn-success"
+                                    onClick={() => startExecution(r)}
+                                    disabled={loading || startingExecutionId === r._id}
+                                  >
+                                    {startingExecutionId === r._id ? 'Starting...' : 'Start Execution'}
+                                  </button>
+                                </div>
+
+                                {executionRuns.length === 0 ? (
+                                  <p className="code-empty">No execution records yet. Execution is disabled by default until a secure sandbox is configured.</p>
+                                ) : (
+                                  <div className="execution-list">
+                                    {executionRuns.map(run => (
+                                      <div key={run.execution_id} className="card mt-2">
+                                        <div className="req-header">
+                                          <h5>{run.execution_id}</h5>
+                                          <span className="tag status">{run.status}</span>
+                                        </div>
+                                        <p><strong>Artifact:</strong> {run.artifact.file_name} (v{run.artifact.version})</p>
+                                        {run.error_message && <p><strong>Message:</strong> {run.error_message}</p>}
+                                        {run.test_results.length === 0 ? (
+                                          <p className="code-empty">No individual test results recorded yet.</p>
+                                        ) : (
+                                          <table className="test-case-table">
+                                            <thead>
+                                              <tr>
+                                                <th>Test</th>
+                                                <th>Status</th>
+                                                <th>Expected</th>
+                                                <th>Actual</th>
+                                                <th>Duration</th>
+                                              </tr>
+                                            </thead>
+                                            <tbody>
+                                              {run.test_results.map(result => (
+                                                <tr key={`${run.execution_id}-${result.test_id}`}>
+                                                  <td>{result.title}</td>
+                                                  <td>{result.status}</td>
+                                                  <td>{result.expected_output || '—'}</td>
+                                                  <td>{result.actual_output || '—'}</td>
+                                                  <td>{result.duration_ms !== null ? `${result.duration_ms} ms` : '—'}</td>
+                                                </tr>
+                                              ))}
+                                            </tbody>
+                                          </table>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
                               </div>
 
                               {latestArtifacts.length === 0 ? (

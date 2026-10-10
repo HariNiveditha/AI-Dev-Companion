@@ -54,3 +54,40 @@ Confirmed Requirement Description: {description}
 Confirmed Requirement Analysis:
 {json.dumps(analysis, indent=2)}
 """
+
+
+def get_test_case_generation_prompt(title: str, description: str, analysis: dict) -> str:
+    import json
+
+    return f"""You are an expert QA engineer and software test designer.
+Generate multiple high-quality software test cases for the confirmed requirement below.
+
+Return only structured JSON in this exact shape:
+{{
+  "test_cases": [
+    {{
+      "title": "Test case title",
+      "description": "What this test verifies",
+      "input": "Example input or scenario",
+      "expected_output": "Expected result",
+      "priority": "HIGH",
+      "type": "FUNCTIONAL"
+    }}
+  ]
+}}
+
+Rules:
+- Generate 5 to 8 relevant test cases.
+- Use realistic values for priority: HIGH, MEDIUM, or LOW.
+- Use realistic values for type: FUNCTIONAL, NEGATIVE, EDGE_CASE, SECURITY, or VALIDATION.
+- Include a mix of normal, boundary, validation, and failure scenarios when appropriate.
+- Do not include markdown fences, explanations, or additional fields.
+- Do not include comments.
+- Ensure each test case is meaningful and aligned to the requirement.
+- The JSON must be valid and parseable.
+
+Confirmed Requirement Title: {title}
+Confirmed Requirement Description: {description}
+Requirement Analysis:
+{json.dumps(analysis, indent=2)}
+"""
