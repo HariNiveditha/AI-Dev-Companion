@@ -740,3 +740,34 @@ body {
     grid-template-columns: 1fr;
   }
 }
+.documentation-section {
+  margin-bottom: 24px;
+}
+ 
+.documentation-section select {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #e4deef;
+  border-radius: 8px;
+  background: white;
+  color: #242033;
+  font-size: 15px;
+}
+ 
+.documentation-content {
+  display: block;
+  width: 100%;
+  min-height: 350px;
+  box-sizing: border-box;
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid #e4deef;
+  border-radius: 8px;
+  background: #faf9fc;
+  color: #29243a;
+  font-family: Consolas, monospace;
+  font-size: 14px;
+  line-height: 1.6;
+  resize: vertical;
+  white-space: pre-wrap;
+}

@@ -133,6 +133,18 @@ interface CoverageReport {
   project_id: string | null;
 }
 
+type DocumentationType = 'README' | 'JAVA_DOCS' | 'SETUP' | 'API_DOCS';
+
+interface DocumentationRecord {
+  documentation_id: string;
+  project_id: string;
+  document_type: string;
+  title: string;
+  content: string;
+  created_at: string;
+  updated_at: string;
+}
+
 const getLatestArtifacts = (artifacts: CodeArtifact[]) => {
   const latest = new Map<string, CodeArtifact>();
   artifacts.forEach(artifact => {
@@ -175,6 +187,15 @@ function App() {
   const [startingExecutionId, setStartingExecutionId] = useState<string | null>(null);
   const [coverageReport, setCoverageReport] = useState<CoverageReport | null>(null);
   const [coverageLoading, setCoverageLoading] = useState(false);
+
+  // Documentation Generation
+  const [documentationType, setDocumentationType] =
+    useState<DocumentationType>('README');
+  const [documentationRecords, setDocumentationRecords] =
+    useState<DocumentationRecord[]>([]);
+  const [generatedDocumentation, setGeneratedDocumentation] =
+    useState<DocumentationRecord | null>(null);
+  const [documentationLoading, setDocumentationLoading] = useState(false);
 
   // Notifications
   const notifyError = (msg: string) => {
@@ -440,11 +461,75 @@ function App() {
     }
   };
 
+  const fetchDocumentation = async (projectId: string) => {
+    try {
+      const response = await axios.get(
+        `${API_URL}/documentation/${projectId}`,
+      );
+
+      const records: DocumentationRecord[] =
+        response.data.documentation || [];
+
+      setDocumentationRecords(records);
+      setGeneratedDocumentation(records[0] || null);
+    } catch {
+      setDocumentationRecords([]);
+      setGeneratedDocumentation(null);
+    }
+  };
+
+  const generateDocumentation = async () => {
+    if (!selectedProject) {
+      notifyError('Please select a project first.');
+      return;
+    }
+
+    setDocumentationLoading(true);
+
+    try {
+      const response = await axios.post(
+        `${API_URL}/documentation/generate`,
+        {
+          project_id: selectedProject._id,
+          document_type: documentationType,
+        },
+      );
+
+      const documentation: DocumentationRecord =
+        response.data.documentation;
+
+      if (!documentation) {
+        throw new Error('The API returned no documentation.');
+      }
+
+      setGeneratedDocumentation(documentation);
+
+      setDocumentationRecords(current => [
+        documentation,
+        ...current.filter(
+          item => item.documentation_id !== documentation.documentation_id,
+        ),
+      ]);
+
+      notifySuccess('Documentation generated successfully.');
+    } catch (err: any) {
+      notifyError(
+        err.response?.data?.detail ||
+        err.message ||
+        'Failed to generate documentation.',
+      );
+    } finally {
+      setDocumentationLoading(false);
+    }
+  };
+
   const openProject = (project: Project) => {
     setSelectedProject(project);
     setCoverageReport(null);
+    setGeneratedDocumentation(null);
     fetchRequirements(project._id);
     fetchCoverageReport(project._id);
+    fetchDocumentation(project._id);
     setShowCreateProject(false);
   };
 
@@ -691,6 +776,109 @@ function App() {
                     The coverage report could not be loaded. Check that the backend is
                     running, then refresh the report.
                   </p>
+                )}
+              </div>
+
+              {/* Documentation Generation */}
+              <div className="card mt-4 documentation-section">
+                <div className="coverage-report-header">
+                  <div>
+                    <h2>Documentation Generation</h2>
+                    <p>
+                      Generate project documentation from your saved Java source files.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="documentation-type">Documentation Type</label>
+                  <select
+                    id="documentation-type"
+                    value={documentationType}
+                    onChange={event =>
+                      setDocumentationType(event.target.value as DocumentationType)
+                    }
+                  >
+                    <option value="README">README</option>
+                    <option value="JAVA_DOCS">Java Documentation</option>
+                    <option value="SETUP">Setup Guide</option>
+                    <option value="API_DOCS">API Documentation</option>
+                  </select>
+                </div>
+
+                <button
+                  className="btn-primary mt-3"
+                  onClick={generateDocumentation}
+                  disabled={documentationLoading}
+                >
+                  {documentationLoading
+                    ? 'Generating Documentation...'
+                    : 'Generate Documentation'}
+                </button>
+
+                {generatedDocumentation && (
+                  <div className="generated-documentation mt-4">
+                    <div className="coverage-report-header">
+                      <div>
+                        <h3>{generatedDocumentation.title}</h3>
+                        <p>
+                          Type: {generatedDocumentation.document_type}
+                        </p>
+                      </div>
+                      <button
+                        className="btn-secondary"
+                        onClick={() => {
+                          const blob = new Blob(
+                            [generatedDocumentation.content],
+                            { type: 'text/markdown;charset=utf-8' },
+                          );
+                          const url = URL.createObjectURL(blob);
+                          const link = document.createElement('a');
+
+                          link.href = url;
+                          link.download = `${generatedDocumentation.document_type.toLowerCase()}.md`;
+                          link.click();
+
+                          URL.revokeObjectURL(url);
+                        }}
+                      >
+                        Download Markdown
+                      </button>
+                    </div>
+
+                    <textarea
+                      className="documentation-content"
+                      value={generatedDocumentation.content}
+                      readOnly
+                      rows={18}
+                      aria-label="Generated documentation"
+                    />
+                  </div>
+                )}
+
+                {!generatedDocumentation && !documentationLoading && (
+                  <p className="code-empty mt-3">
+                    No documentation generated yet. Select a document type and click
+                    Generate Documentation.
+                  </p>
+                )}
+
+                {documentationRecords.length > 0 && (
+                  <div className="mt-4">
+                    <h3>Previously Generated Documentation</h3>
+
+                    <div className="action-group">
+                      {documentationRecords.map(record => (
+                        <button
+                          key={record.documentation_id}
+                          className="btn-secondary"
+                          onClick={() => setGeneratedDocumentation(record)}
+                        >
+                          {record.title}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 )}
               </div>
 
