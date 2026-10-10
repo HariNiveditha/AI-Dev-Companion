@@ -120,6 +120,19 @@ interface ExecutionRun {
   error_message: string | null;
 }
 
+interface CoverageReport {
+  total_requirements: number;
+  covered_requirements: number;
+  uncovered_requirements: string[];
+  requirement_coverage_percentage: number;
+  total_test_cases: number;
+  total_execution_runs: number;
+  execution_status: string;
+  execution_status_counts: Record<string, number>;
+  note: string;
+  project_id: string | null;
+}
+
 const getLatestArtifacts = (artifacts: CodeArtifact[]) => {
   const latest = new Map<string, CodeArtifact>();
   artifacts.forEach(artifact => {
@@ -160,6 +173,8 @@ function App() {
   const [testCasesByRequirement, setTestCasesByRequirement] = useState<Record<string, TestCase[]>>({});
   const [executionRunsByRequirement, setExecutionRunsByRequirement] = useState<Record<string, ExecutionRun[]>>({});
   const [startingExecutionId, setStartingExecutionId] = useState<string | null>(null);
+  const [coverageReport, setCoverageReport] = useState<CoverageReport | null>(null);
+  const [coverageLoading, setCoverageLoading] = useState(false);
 
   // Notifications
   const notifyError = (msg: string) => {
@@ -407,9 +422,29 @@ function App() {
     }
   };
 
+  const fetchCoverageReport = async (projectId: string) => {
+    setCoverageLoading(true);
+
+    try {
+      const response = await axios.get<CoverageReport>(
+        `${API_URL}/reports/coverage`,
+        { params: { project_id: projectId } },
+      );
+
+      setCoverageReport(response.data);
+    } catch {
+      setCoverageReport(null);
+      notifyError('Failed to load the coverage report.');
+    } finally {
+      setCoverageLoading(false);
+    }
+  };
+
   const openProject = (project: Project) => {
     setSelectedProject(project);
+    setCoverageReport(null);
     fetchRequirements(project._id);
+    fetchCoverageReport(project._id);
     setShowCreateProject(false);
   };
 
@@ -531,6 +566,132 @@ function App() {
                 </div>
                 <p><strong>Language:</strong> {selectedProject.language}</p>
                 <p><strong>Description:</strong> {selectedProject.description}</p>
+              </div>
+
+              {/* Coverage & Quality Report */}
+              <div className="card coverage-report mt-4">
+                <div className="coverage-report-header">
+                  <div>
+                    <h2>Coverage &amp; Quality Report</h2>
+                    <p>Requirement coverage and test execution overview.</p>
+                  </div>
+                  <button
+                    className="btn-secondary"
+                    onClick={() => fetchCoverageReport(selectedProject._id)}
+                    disabled={coverageLoading}
+                  >
+                    {coverageLoading ? 'Refreshing...' : 'Refresh Report'}
+                  </button>
+                </div>
+
+                {coverageLoading && !coverageReport ? (
+                  <p className="loader">Loading coverage report...</p>
+                ) : coverageReport ? (
+                  <>
+                    <div className="coverage-metrics">
+                      <div className="coverage-metric">
+                        <span>Requirement Coverage</span>
+                        <strong>{coverageReport.requirement_coverage_percentage}%</strong>
+                      </div>
+
+                      <div className="coverage-metric">
+                        <span>Covered Requirements</span>
+                        <strong>
+                          {coverageReport.covered_requirements}/
+                          {coverageReport.total_requirements}
+                        </strong>
+                      </div>
+
+                      <div className="coverage-metric">
+                        <span>Total Test Cases</span>
+                        <strong>{coverageReport.total_test_cases}</strong>
+                      </div>
+
+                      <div className="coverage-metric">
+                        <span>Execution Runs</span>
+                        <strong>{coverageReport.total_execution_runs}</strong>
+                      </div>
+                    </div>
+
+                    <div
+                      className="coverage-progress-track"
+                      role="progressbar"
+                      aria-label="Requirement coverage"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={coverageReport.requirement_coverage_percentage}
+                    >
+                      <div
+                        className="coverage-progress-fill"
+                        style={{
+                          width: `${Math.max(
+                            0,
+                            Math.min(100, coverageReport.requirement_coverage_percentage),
+                          )}%`,
+                        }}
+                      />
+                    </div>
+
+                    <p className="coverage-note">{coverageReport.note}</p>
+
+                    <div className="coverage-details">
+                      <section>
+                        <h3>Uncovered Requirements</h3>
+
+                        {coverageReport.uncovered_requirements.length === 0 ? (
+                          <p className="coverage-success">
+                            All requirements have at least one linked test case.
+                          </p>
+                        ) : (
+                          <ul className="coverage-uncovered-list">
+                            {coverageReport.uncovered_requirements.map(requirementId => {
+                              const requirement = requirements.find(
+                                item => item._id === requirementId,
+                              );
+
+                              return (
+                                <li key={requirementId}>
+                                  <strong>
+                                    {requirement?.title || requirementId}
+                                  </strong>
+                                  {!requirement && (
+                                    <span className="coverage-id">
+                                      {requirementId}
+                                    </span>
+                                  )}
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        )}
+                      </section>
+
+                      <section>
+                        <h3>Execution Status Breakdown</h3>
+
+                        {Object.keys(coverageReport.execution_status_counts).length === 0 ? (
+                          <p className="code-empty">No execution runs recorded.</p>
+                        ) : (
+                          <ul className="coverage-status-list">
+                            {Object.entries(coverageReport.execution_status_counts)
+                              .sort(([a], [b]) => a.localeCompare(b))
+                              .map(([status, count]) => (
+                                <li key={status}>
+                                  <span className="tag status">{status}</span>
+                                  <strong>{count}</strong>
+                                </li>
+                              ))}
+                          </ul>
+                        )}
+                      </section>
+                    </div>
+                  </>
+                ) : (
+                  <p className="code-empty">
+                    The coverage report could not be loaded. Check that the backend is
+                    running, then refresh the report.
+                  </p>
+                )}
               </div>
 
               <div className="card requirements-section mt-4">

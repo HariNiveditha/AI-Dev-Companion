@@ -608,3 +608,135 @@ body {
   .analysis-tools-result > span { grid-column: auto; }
 }
 
+/* ===== Coverage & Quality Report ===== */
+
+.coverage-report {
+  margin-bottom: 1rem;
+}
+
+.coverage-report-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.25rem;
+}
+
+.coverage-report-header h2 {
+  margin-bottom: 0.35rem;
+}
+
+.coverage-report-header p,
+.coverage-note {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.coverage-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1rem;
+  margin: 1rem 0;
+}
+
+.coverage-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  min-width: 0;
+}
+
+.coverage-metric span {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.coverage-metric strong {
+  font-size: 1.6rem;
+  overflow-wrap: anywhere;
+}
+
+.coverage-progress-track {
+  height: 12px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--border);
+  margin: 1rem 0;
+}
+
+.coverage-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+  transition: width 0.3s ease;
+}
+
+.coverage-note {
+  margin-bottom: 1.25rem;
+}
+
+.coverage-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.5rem;
+  margin-top: 1.5rem;
+}
+
+.coverage-details h3 {
+  margin-bottom: 0.8rem;
+}
+
+.coverage-uncovered-list,
+.coverage-status-list {
+  padding-left: 1.25rem;
+}
+
+.coverage-uncovered-list li {
+  margin-bottom: 0.65rem;
+  overflow-wrap: anywhere;
+}
+
+.coverage-id {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.coverage-success {
+  padding: 0.75rem;
+  border-radius: 8px;
+  background: #eaf8f2;
+}
+
+.coverage-status-list {
+  list-style: none;
+  padding: 0;
+}
+
+.coverage-status-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.65rem;
+}
+
+@media (max-width: 768px) {
+  .coverage-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .coverage-details {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 420px) {
+  .coverage-metrics {
+    grid-template-columns: 1fr;
+  }
+}

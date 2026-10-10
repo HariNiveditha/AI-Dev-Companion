@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
+from app.api.reports import router as reports_router
 load_dotenv()
 
 from app.api.projects import router as projects_router
@@ -26,10 +27,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 app.include_router(projects_router, prefix="/projects", tags=["projects"])
 app.include_router(requirements_router, prefix="/requirements", tags=["requirements"])
 app.include_router(artifacts_router, prefix="/artifacts", tags=["artifacts"])
 app.include_router(executions_router, tags=["executions"])
+app.include_router(reports_router)
 
 @app.get("/")
 def read_root():
