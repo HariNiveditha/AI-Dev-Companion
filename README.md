@@ -1,4 +1,5 @@
-# AI-Dev-Companion - Phases 1 through 5
+# AI-Dev-Companion - Phases 1 to 8
+
 
 This repository contains project and requirement setup, AI requirement analysis and confirmation, AI Java code generation, Java compilation, and real static/security analysis for confirmed requirements.
 
