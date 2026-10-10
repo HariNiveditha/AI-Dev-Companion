@@ -244,6 +244,19 @@ async def generate_requirement_test_cases(requirement_id: str):
     return test_cases
 
 
+@router.get("/{requirement_id}/test-cases", response_model=list[TestCase])
+async def get_requirement_test_cases(requirement_id: str):
+    db = get_db()
+    requirement = await db.requirements.find_one({"_id": requirement_id})
+    if not requirement:
+        raise HTTPException(status_code=404, detail="Requirement not found")
+
+    return await db.test_cases.find({"requirement_id": requirement_id}).sort([
+        ("created_at", 1),
+        ("test_case_id", 1),
+    ]).to_list(1000)
+
+
 @router.get("/{requirement_id}/artifacts", response_model=list[CodeArtifact])
 async def get_requirement_artifacts(requirement_id: str):
     db = get_db()
