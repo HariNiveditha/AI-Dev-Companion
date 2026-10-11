@@ -2,13 +2,19 @@ version: '3.8'
 services:
   mongodb:
     image: mongo:latest
+    # Host port 27018 avoids conflicting with the native Windows MongoDB
+    # service, which already occupies 127.0.0.1:27017 and hosts an unrelated
+    # `marg` database that must stay online.
     ports:
-      - "27017:27017"
+      - "27018:27017"
     volumes:
+      # Named volume -> data (and the initialized root user) survives
+      # container recreation. Removed only via an explicit `docker compose down -v`.
       - mongo_data:/data/db
     environment:
       - MONGO_INITDB_ROOT_USERNAME=root
       - MONGO_INITDB_ROOT_PASSWORD=example
+    restart: unless-stopped
 
 volumes:
   mongo_data:

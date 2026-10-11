@@ -57,9 +57,23 @@ class AnalysisToolResult(BaseModel):
     findings: List[AnalysisFinding] = []
 
 
+class AnalyzedFile(BaseModel):
+    """Record of one file version included in an analysis snapshot."""
+
+    artifact_id: str
+    file_name: str
+    version: int
+
+
 class StaticAnalysisResult(BaseModel):
     analysis_id: str
     artifact_id: str
+    # Version of ``artifact_id`` that was actually analyzed. Optional so that
+    # legacy documents (written before version tracking existed) still validate.
+    version: Optional[int] = None
+    # Every file version that formed the analysis snapshot (analysis compiles
+    # and scans the whole requirement, so this records exactly what was run).
+    analyzed_files: List[AnalyzedFile] = []
     status: Literal["COMPLETED", "PARTIAL", "TOOL_ERROR"]
     checkstyle: AnalysisToolResult
     spotbugs: AnalysisToolResult

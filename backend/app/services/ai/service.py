@@ -54,11 +54,12 @@ def generate_test_cases(
 def generate_code_improvement(
     title: str,
     description: str,
-    source_code: str,
+    source_files: dict[str, str],
     findings: list[dict],
+    target_file: str,
 ) -> CodeImprovementResponse:
     prompt = get_code_improvement_prompt(
-        title, description, source_code, findings
+        title, description, source_files, findings, target_file
     )
     provider = AIProvider()
     response = provider.generate_code(prompt, CodeImprovementResponse)

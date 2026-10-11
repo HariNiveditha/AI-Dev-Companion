@@ -13,6 +13,7 @@ from app.services.ai.service import (
     generate_java_code,
     generate_test_cases,
 )
+from app.services.java_validator import validate_java_source
 
 router = APIRouter()
 
@@ -123,6 +124,18 @@ async def generate_code(requirement_id: str):
                 detail="AI returned an invalid Java source file",
             )
         file_names.add(generated_file.file_name)
+
+    # Structural validation: reject malformed Java before persisting.
+    for generated_file in generated.files:
+        validation = validate_java_source(generated_file.content)
+        if not validation.ok:
+            detail = (
+                f"AI returned structurally invalid Java source for "
+                f"{generated_file.file_name}: "
+                + "; ".join(validation.errors)
+                + ". Please regenerate the code."
+            )
+            raise HTTPException(status_code=502, detail=detail)
 
     now = datetime.utcnow()
     artifacts = []

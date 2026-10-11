@@ -48,10 +48,13 @@ Rules:
 - Do not claim that the code has been compiled or tested.
 - Return one or more complete Java source files.
 - Every file_name must be a simple Java filename ending in .java, with no path.
-- Use proper Java formatting with newlines between statements, imports, and class declarations.
-- Each statement must be on its own line.
-- Imports must be separated by newlines.
-- Class and method declarations must be on separate lines.
+
+CRITICAL FORMATTING REQUIREMENTS — violating any of these will produce invalid output:
+- Every file's content MUST contain real newline characters (\\n in JSON) between statements, imports, and declarations. Do NOT return the entire file on a single line.
+- Every import statement must include the literal word "import", e.g. "import java.util.Base64;" — never just "java.util.Base64;".
+- Every opening brace must have a matching closing brace. The file must end with all braces closed.
+- Every file must contain a class, interface, enum, or record declaration.
+- Do not leave Markdown code fences (```) inside the content string.
 
 Confirmed Requirement Title: {title}
 Confirmed Requirement Description: {description}
@@ -100,42 +103,84 @@ Requirement Analysis:
 def get_code_improvement_prompt(
     title: str,
     description: str,
-    source_code: str,
+    source_files: dict[str, str],
     findings: list[dict],
+    target_file: str,
 ) -> str:
     import json
 
     findings_json = json.dumps(findings, indent=2)
 
+    # Render every analyzed file so the model can see the exact code each
+    # finding refers to.  Findings routinely land in files other than the one
+    # the user selected, so the model must be able to fix the file where the
+    # finding actually lives.
+    rendered_files = []
+    for file_name, content in source_files.items():
+        marker = "  <<< currently selected by the user" if file_name == target_file else ""
+        rendered_files.append(
+            f"### File: {file_name}{marker}\n```java\n{content}\n```"
+        )
+    files_block = "\n\n".join(rendered_files)
+
     return f"""You are an expert Java software engineer specializing in code quality and security.
-You are given a Java source file, the software requirement it implements, and a list of static analysis findings from Checkstyle, SpotBugs, and Semgrep.
+You are given the Java source files of a small project, the software requirement they implement, and a list of static analysis findings from Checkstyle, SpotBugs, and Semgrep.
 
-Your task is to propose targeted improvements to the source code that address the actionable findings while preserving the original intended behavior.
+## Your task
+1. Evaluate EVERY finding listed in "Static Analysis Findings" individually, against the exact source shown above.
+2. Classify each finding as exactly one of:
+   - ACTIONABLE: a concrete, safe code change in the file the finding names can resolve it.
+   - NON_ACTIONABLE: a false positive, or the finding is correct but needs no code change.
+   - NEEDS_CONTEXT: you cannot decide safely from the source provided.
+3. For each ACTIONABLE finding, apply the smallest fix in the file the finding names, and record its finding_id in addressed_finding_ids.
+4. Choose target_file to be the single file where you made the most substantive fix (the file that contained the actionable findings). Write that file's COMPLETE improved source in improved_content. Do not modify any other file.
+5. Report findings you did not fix honestly under non_actionable_findings with a reason. Do NOT claim a finding is fixed unless your change actually resolves it.
 
-## Rules:
-- Preserve the original package declaration, imports, class names, and public method signatures.
+IMPORTANT: A finding may name a DIFFERENT file than the user's selected file. You must still fix it, in the file the finding names, and set target_file to that file. Do not modify a file merely because it is selected if its violations are elsewhere.
+
+## Rules
+- Preserve the original package declaration, imports, class names, and public method signatures of the file you improve.
+- Preserve the exact indentation and whitespace of every line you do not need to change. Do NOT re-indent, re-align, or reformat any line as a side effect of your fix - closing braces must keep their original indentation. Unrelated whitespace changes will be rejected.
 - Do not introduce unrelated refactoring or new features.
 - Do not change the intended behavior of the code.
-- If a finding is a false positive or does not require a code change, list it under non_actionable_findings with a brief explanation.
-- Only make changes that are directly supported by the findings.
+- Do not suppress warnings, delete findings, or weaken checks.
+- Only make changes directly supported by a finding.
+- Every finding_id you were given MUST appear exactly once in finding_assessments.
 - The improved code must be complete and compilable.
-- Do not add comments unless they clarify a non-obvious fix.
-- Return only structured JSON matching this schema.
+
+## Special guidance
+- A Checkstyle "should be separated from previous line" (EmptyLineSeparatorCheck) finding is an actionable formatting fix: insert the required blank line at the named file/line. Insert blank lines only - do not touch any other line.
+- A Checkstyle IndentationCheck finding IS a whitespace fix: change only the indentation of the exact offending line(s) to the expected level reported by the finding, and change nothing else in the file.
+- A SpotBugs THROWS_METHOD_THROWS_RUNTIMEEXCEPTION finding is usually NON_ACTIONABLE or NEEDS_CONTEXT: rethrowing as RuntimeException is often deliberate. Only change it if doing so cannot break callers or alter behavior; otherwise explain why you left it.
+
+## CRITICAL FORMATTING REQUIREMENTS — violating any of these produces invalid output
+- improved_content MUST contain real newline characters (\\n in JSON) between statements, imports, and declarations. Do NOT return the file on a single line.
+- Every import statement must include the literal word "import", e.g. "import java.util.Base64;".
+- Every opening brace must have a matching closing brace. The file must end with all braces closed.
+- Do not leave Markdown code fences (```) inside improved_content.
 
 ## Response Schema:
 {{
-    "improved_content": "complete improved Java source code",
-    "explanation": "explanation of the changes made and why they address the findings",
-    "findings_addressed": ["brief description of each finding that was addressed"],
-    "non_actionable_findings": ["brief description of each finding that does not require a code change"]
+    "improved_content": "complete improved source of the file named in target_file",
+    "target_file": "the exact file_name you improved, e.g. \\"User.java\\"",
+    "explanation": "what changed and which finding_ids each change addresses",
+    "findings_addressed": ["short human-readable description of each addressed finding"],
+    "addressed_finding_ids": ["F1", "F3"],
+    "finding_assessments": [
+        {{"finding_id": "F1", "classification": "ACTIONABLE", "reasoning": "why"}},
+        {{"finding_id": "F2", "classification": "NEEDS_CONTEXT", "reasoning": "why"}}
+    ],
+    "non_actionable_findings": ["short description + reason for each finding not fixed"]
 }}
 
 ## Software Requirement:
 Title: {title}
 Description: {description}
 
-## Original Java Source Code:
-{source_code}
+## User's selected file (informational only): {target_file}
+
+## Project Source Files:
+{files_block}
 
 ## Static Analysis Findings:
 {findings_json}

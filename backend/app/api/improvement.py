@@ -17,6 +17,7 @@ from app.db.mongodb import get_db
 from app.models.code_artifact import (
     AnalysisFinding,
     AnalysisToolResult,
+    AnalyzedFile,
     CodeArtifact,
     CompileResult,
     StaticAnalysisResult,
@@ -89,7 +90,8 @@ async def generate_improvement(artifact_id: str):
             detail="Static analysis has not been run for this artifact. Run analysis first.",
         )
 
-    # Collect findings from all tools
+    # Collect findings from all tools, assigning each a stable ID so the AI's
+    # response can be mapped back without guesswork.
     findings: list[AnalysisFinding] = []
     for tool_key in ["checkstyle", "spotbugs", "security"]:
         tool_result = analysis.get(tool_key, {})
@@ -103,27 +105,40 @@ async def generate_improvement(artifact_id: str):
             detail="No static analysis findings to improve. Analysis completed with zero findings.",
         )
 
-    # Prepare findings for AI
-    findings_for_ai = [
-        {
-            "tool": f.tool,
-            "severity": f.severity,
-            "file": f.file,
-            "line": f.line,
-            "column": f.column,
-            "rule": f.rule,
-            "message": f.message,
-        }
-        for f in findings
-    ]
+    finding_ids: dict[str, AnalysisFinding] = {}
+    findings_for_ai: list[dict] = []
+    for index, f in enumerate(findings, start=1):
+        finding_id = f"F{index}"
+        finding_ids[finding_id] = f
+        findings_for_ai.append(
+            {
+                "finding_id": finding_id,
+                "tool": f.tool,
+                "severity": f.severity,
+                "file": f.file,
+                "line": f.line,
+                "column": f.column,
+                "rule": f.rule,
+                "message": f.message,
+            }
+        )
+
+    # Build the full analyzed source context.  Findings routinely reference
+    # files other than the selected artifact, so the AI must see every file in
+    # the analysis snapshot or it cannot fix them.
+    source_files = await _analyzed_source_files(analysis, artifact)
+    # Map file_name -> artifact_id for every analyzed file, so a proposal can
+    # target a file other than the one the user selected.
+    artifact_id_by_file = await _analyzed_artifact_ids(analysis, artifact)
 
     # Call AI service
     try:
         ai_response = generate_code_improvement(
             title=requirement["title"],
             description=requirement["description"],
-            source_code=artifact["content"],
+            source_files=source_files,
             findings=findings_for_ai,
+            target_file=artifact["file_name"],
         )
     except ValueError as e:
         raise HTTPException(status_code=503, detail=str(e))
@@ -132,6 +147,14 @@ async def generate_improvement(artifact_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI improvement failed: {str(e)}")
 
+    # Resolve which file the AI actually improved.  It may differ from the
+    # selected artifact when the actionable findings live in another file.
+    target_name = (getattr(ai_response, "target_file", None) or "").strip()
+    if not target_name or target_name not in source_files:
+        target_name = artifact["file_name"]
+    improved_artifact_id = artifact_id_by_file.get(target_name, artifact_id)
+    original_target_content = source_files[target_name]
+
     # Validate AI response
     if not ai_response.improved_content.strip():
         raise HTTPException(
@@ -139,43 +162,67 @@ async def generate_improvement(artifact_id: str):
             detail="AI returned empty improved content",
         )
 
-    if ai_response.improved_content.strip() == artifact["content"].strip():
+    if ai_response.improved_content.strip() == original_target_content.strip():
+        # A no-op response is not proof that every finding is non-actionable.
+        # Report the AI's own per-finding verdicts so the reason is visible.
         raise HTTPException(
             status_code=400,
-            detail="AI did not propose any changes. All findings may be non-actionable.",
+            detail=_no_change_diagnostic(ai_response, findings_for_ai, target_name),
         )
 
-    # Determine which findings were addressed
-    findings_addressed = []
-    non_actionable = []
+    # Structural validation: reject malformed Java before persisting.
+    from app.services.java_validator import validate_java_source
 
-    # Simple heuristic: if the AI mentioned a finding rule or message, consider it addressed
-    explanation_lower = ai_response.explanation.lower()
-    for finding in findings:
-        finding_text = f"{finding.rule or ''} {finding.message}".lower()
-        # Check if the finding is mentioned in the explanation or findings_addressed
-        addressed = False
-        for addr_desc in ai_response.findings_addressed:
-            if finding.rule and finding.rule.lower() in addr_desc.lower():
-                addressed = True
-                break
-            if finding.message.lower() in addr_desc.lower():
-                addressed = True
-                break
+    validation = validate_java_source(ai_response.improved_content)
+    if not validation.ok:
+        detail = (
+            f"AI returned structurally invalid Java source for {target_name}: "
+            + "; ".join(validation.errors)
+            + ". Please regenerate the improvement proposal."
+        )
+        raise HTTPException(status_code=502, detail=detail)
 
-        if addressed:
-            findings_addressed.append(finding)
-        else:
-            non_actionable.append(finding)
+    # Regression guard: the AI regenerates the whole file and sometimes
+    # re-indents lines no finding requires (observed: closing braces at 8
+    # spaces instead of 4, producing new IndentationCheck violations).
+    # Revert whitespace-only changes that no indentation finding justifies
+    # so the proposal preserves already-correct code.
+    from app.services.format_guard import (
+        indentation_finding_lines,
+        preserve_unrelated_formatting,
+        restoration_notes,
+    )
 
-    # Create and persist proposal
+    justified = indentation_finding_lines(findings_for_ai, target_name)
+    guarded_content, restorations = preserve_unrelated_formatting(
+        original_target_content, ai_response.improved_content, justified
+    )
+    if guarded_content.strip() == original_target_content.strip():
+        # The AI changed nothing except whitespace it was not asked to touch.
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"AI returned only unjustified formatting changes for {target_name} "
+                "and no code fix. Please regenerate the improvement proposal."
+            ),
+        )
+    formatting_notes = restoration_notes(restorations)
+
+    # Map the AI's verdicts back to real findings by ID.
+    findings_addressed, non_actionable = _map_finding_verdicts(
+        ai_response, finding_ids
+    )
+
+    # Create and persist proposal against the file that was actually improved.
     try:
         proposal = await create_proposal(
-            artifact_id=artifact_id,
-            improved_content=ai_response.improved_content,
+            artifact_id=improved_artifact_id,
+            improved_content=guarded_content,
             explanation=ai_response.explanation,
             findings_addressed=findings_addressed,
             non_actionable_findings=non_actionable,
+            finding_assessments=getattr(ai_response, "finding_assessments", None) or [],
+            formatting_notes=formatting_notes,
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -183,6 +230,116 @@ async def generate_improvement(artifact_id: str):
         raise HTTPException(status_code=500, detail=f"Failed to persist proposal: {str(e)}")
 
     return proposal
+
+
+def _no_change_diagnostic(
+    ai_response: "CodeImprovementResponse",
+    findings_for_ai: list[dict],
+    target_name: str = "?",
+) -> str:
+    """Explain why the AI returned unchanged code, from its own verdicts."""
+    by_id = {f["finding_id"]: f for f in findings_for_ai}
+    assessments = getattr(ai_response, "finding_assessments", None) or []
+    if assessments:
+        parts = []
+        for a in assessments:
+            src = by_id.get(a.finding_id, {})
+            label = f"{a.finding_id} ({src.get('file', '?')}:{src.get('line', '?')})"
+            parts.append(f"{label} {a.classification}: {a.reasoning or 'no reason given'}")
+        return (
+            f"AI reviewed every finding but proposed no source change to {target_name}. "
+            "Per-finding verdicts: " + " | ".join(parts)
+        )
+    non_actionable = getattr(ai_response, "non_actionable_findings", None) or []
+    if non_actionable:
+        return (
+            f"AI proposed no source change to {target_name} and classified all findings as "
+            "non-actionable: " + "; ".join(non_actionable)
+        )
+    return (
+        f"AI returned {target_name} unchanged without a per-finding "
+        "explanation. The response was valid but not useful; please regenerate."
+    )
+
+
+def _map_finding_verdicts(
+    ai_response: "CodeImprovementResponse",
+    finding_ids: dict[str, AnalysisFinding],
+) -> tuple[list[AnalysisFinding], list[AnalysisFinding]]:
+    """Split findings into addressed vs not, using explicit IDs and verdicts.
+
+    An ID counts as addressed only if the AI listed it in addressed_finding_ids
+    or assessed it ACTIONABLE.  Anything else is reported honestly as not fixed.
+    """
+    addressed: set[str] = set(getattr(ai_response, "addressed_finding_ids", None) or [])
+    for assessment in getattr(ai_response, "finding_assessments", None) or []:
+        if assessment.classification == "ACTIONABLE":
+            addressed.add(assessment.finding_id)
+
+    findings_addressed: list[AnalysisFinding] = []
+    non_actionable: list[AnalysisFinding] = []
+    for finding_id, finding in finding_ids.items():
+        if finding_id in addressed:
+            findings_addressed.append(finding)
+        else:
+            non_actionable.append(finding)
+    return findings_addressed, non_actionable
+
+
+async def _analyzed_source_files(
+    analysis: dict, artifact: dict
+) -> dict[str, str]:
+    """Load the exact source of every file in the analysis snapshot.
+
+    Falls back to the latest version of any file that is no longer resolvable,
+    and always includes the selected artifact so it can be improved.
+    """
+    db = get_db()
+    source_files: dict[str, str] = {artifact["file_name"]: artifact["content"]}
+
+    for analyzed in analysis.get("analyzed_files", []) or []:
+        file_name = analyzed.get("file_name")
+        analyzed_artifact_id = analyzed.get("artifact_id")
+        if not file_name or file_name in source_files:
+            continue
+        doc = None
+        if analyzed_artifact_id:
+            doc = await db.code_artifacts.find_one({"artifact_id": analyzed_artifact_id})
+        if not doc:
+            latest = await db.code_artifacts.find(
+                {"project_id": artifact["project_id"], "requirement_id": artifact["requirement_id"], "file_name": file_name}
+            ).sort("version", -1).to_list(1)
+            doc = latest[0] if latest else None
+        if doc and doc.get("content"):
+            source_files[file_name] = doc["content"]
+
+    return source_files
+
+
+async def _analyzed_artifact_ids(analysis: dict, artifact: dict) -> dict[str, str]:
+    """Map file_name -> artifact_id for every file in the analysis snapshot.
+
+    Lets a proposal target a file other than the selected artifact when the
+    actionable findings live elsewhere.
+    """
+    db = get_db()
+    ids: dict[str, str] = {artifact["file_name"]: artifact["artifact_id"]}
+
+    for analyzed in analysis.get("analyzed_files", []) or []:
+        file_name = analyzed.get("file_name")
+        analyzed_artifact_id = analyzed.get("artifact_id")
+        if not file_name or file_name in ids:
+            continue
+        if analyzed_artifact_id and await db.code_artifacts.find_one({"artifact_id": analyzed_artifact_id}):
+            ids[file_name] = analyzed_artifact_id
+            continue
+        latest = await db.code_artifacts.find(
+            {"project_id": artifact["project_id"], "requirement_id": artifact["requirement_id"], "file_name": file_name}
+        ).sort("version", -1).to_list(1)
+        if latest:
+            ids[file_name] = latest[0]["artifact_id"]
+
+    return ids
 
 
 @router.get("/{proposal_id}", response_model=ImprovementProposal)
@@ -409,12 +566,12 @@ async def _analyze_artifact_internal(artifact_id: str) -> Optional[StaticAnalysi
     related = await db.code_artifacts.find(
         {"project_id": artifact["project_id"], "requirement_id": artifact["requirement_id"], "language": "Java"}
     ).to_list(1000)
-    latest = _latest_artifacts(related)
-    if any(not JAVA_FILE_NAME_PATTERN.fullmatch(item["file_name"]) for item in latest):
+    snapshot = _build_analysis_snapshot(related, artifact)
+    if any(not JAVA_FILE_NAME_PATTERN.fullmatch(item["file_name"]) for item in snapshot):
         return None
 
     with tempfile.TemporaryDirectory(prefix="ai-se-analysis-") as temp_dir:
-        source_paths = _write_sources(temp_dir, latest)
+        source_paths = _write_sources(temp_dir, snapshot)
         checkstyle = _run_checkstyle(source_paths, temp_dir)
         security = _run_semgrep(temp_dir, source_paths)
         javac_path = shutil.which("javac")
@@ -438,6 +595,8 @@ async def _analyze_artifact_internal(artifact_id: str) -> Optional[StaticAnalysi
     result = StaticAnalysisResult(
         analysis_id=str(uuid4()),
         artifact_id=artifact_id,
+        version=artifact.get("version"),
+        analyzed_files=_analyzed_files(snapshot),
         status=result_status,
         checkstyle=checkstyle,
         spotbugs=spotbugs,
@@ -455,6 +614,30 @@ def _latest_artifacts(artifacts: list[dict]) -> list[dict]:
         if not current or artifact.get("version", 0) > current.get("version", 0):
             latest_by_file[artifact["file_name"]] = artifact
     return list(latest_by_file.values())
+
+
+def _build_analysis_snapshot(related: list[dict], selected: dict) -> list[dict]:
+    """Pin the selected file to its chosen version; latest for every other file.
+
+    Keeps the analyzed content scoped to the artifact the caller asked about
+    instead of silently jumping to the newest code for that file.
+    """
+    snapshot_by_file: dict[str, dict] = {
+        item["file_name"]: item for item in _latest_artifacts(related)
+    }
+    snapshot_by_file[selected["file_name"]] = selected
+    return list(snapshot_by_file.values())
+
+
+def _analyzed_files(snapshot: list[dict]) -> list[AnalyzedFile]:
+    return [
+        AnalyzedFile(
+            artifact_id=item["artifact_id"],
+            file_name=item["file_name"],
+            version=item.get("version", 0),
+        )
+        for item in snapshot
+    ]
 
 
 def _write_sources(temp_dir: str, artifacts: list[dict]) -> list[str]:

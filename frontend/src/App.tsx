@@ -81,9 +81,17 @@ interface AnalysisToolResult {
   findings: AnalysisFinding[];
 }
 
+interface AnalyzedFile {
+  artifact_id: string;
+  file_name: string;
+  version: number;
+}
+
 interface StaticAnalysisResult {
   analysis_id: string;
   artifact_id: string;
+  version: number | null;
+  analyzed_files: AnalyzedFile[];
   status: 'COMPLETED' | 'PARTIAL' | 'TOOL_ERROR';
   checkstyle: AnalysisToolResult;
   spotbugs: AnalysisToolResult;
@@ -145,6 +153,12 @@ interface DocumentationRecord {
   updated_at: string;
 }
 
+interface FindingAssessment {
+  finding_id: string;
+  classification: 'ACTIONABLE' | 'NON_ACTIONABLE' | 'NEEDS_CONTEXT';
+  reasoning: string;
+}
+
 interface ImprovementProposal {
   proposal_id: string;
   artifact_id: string;
@@ -156,6 +170,8 @@ interface ImprovementProposal {
   explanation: string;
   findings_addressed: AnalysisFinding[];
   non_actionable_findings: AnalysisFinding[];
+  finding_assessments: FindingAssessment[];
+  formatting_notes?: string[];
   status: 'PENDING' | 'ACCEPTED' | 'REJECTED';
   compile_result: CompileResult | null;
   after_analysis: StaticAnalysisResult | null;
@@ -618,6 +634,19 @@ function App() {
       );
       const updatedProposal: ImprovementProposal = response.data;
       setImprovementProposal(updatedProposal);
+
+      // Refresh the authoritative artifact list from MongoDB so the
+      // Files and Versions panels immediately show the newly accepted
+      // version.  fetchRequirements replaces the array for the
+      // requirement, so no duplicates are introduced.
+      if (selectedProject) {
+        try {
+          await fetchRequirements(selectedProject._id);
+        } catch {
+          // The acceptance itself succeeded; a stale panel is better
+          // than falsely reporting failure.
+        }
+      }
 
       // Fetch comparison
       const comparisonResponse = await axios.get(
@@ -1245,10 +1274,11 @@ function App() {
                                     {requirementArtifacts.map(artifact => (
                                       <button
                                         key={artifact.artifact_id}
-                                        className="version-button"
+                                        className={`version-button ${selectedArtifact?.artifact_id === artifact.artifact_id ? 'active' : ''}`}
                                         onClick={() => selectArtifact(artifact)}
                                       >
                                         {artifact.file_name} v{artifact.version}
+                                        <span className="version-source">{artifact.source}</span>
                                       </button>
                                     ))}
                                   </div>
@@ -1256,7 +1286,9 @@ function App() {
                                     <div className="code-editor">
                                       <div className="code-editor-header">
                                         <strong>{selectedArtifact.file_name}</strong>
-                                        <span>Version {selectedArtifact.version} · {selectedArtifact.source}</span>
+                                        <span>
+                                          v{selectedArtifact.version} · {selectedArtifact.source} · ID {selectedArtifact.artifact_id}
+                                        </span>
                                       </div>
                                       <textarea
                                         value={selectedArtifactId === selectedArtifact.artifact_id ? draftArtifactContent : selectedArtifact.content}
@@ -1304,6 +1336,17 @@ function App() {
                                         <div className="analysis-tools-result">
                                           <h5>Static Analysis</h5>
                                           <span>Overall status: {analysisResults[selectedArtifact.artifact_id].status}</span>
+                                          <span className="analysis-scope">
+                                            Analyzed {selectedArtifact.file_name} v{analysisResults[selectedArtifact.artifact_id].version ?? '?'}
+                                            {' · '}{new Date(analysisResults[selectedArtifact.artifact_id].created_at).toLocaleString()}
+                                          </span>
+                                          {analysisResults[selectedArtifact.artifact_id].analyzed_files?.length > 0 && (
+                                            <span className="analysis-scope">
+                                              Snapshot: {analysisResults[selectedArtifact.artifact_id].analyzed_files
+                                                .map(f => `${f.file_name} v${f.version}`)
+                                                .join(', ')}
+                                            </span>
+                                          )}
                                           {([
                                             ['Checkstyle', analysisResults[selectedArtifact.artifact_id].checkstyle],
                                             ['SpotBugs', analysisResults[selectedArtifact.artifact_id].spotbugs],
@@ -1348,16 +1391,58 @@ function App() {
                                           {improvementProposal && (
                                             <div className="improvement-proposal mt-3">
                                               <div className="improvement-proposal-header">
-                                                <h5>Improvement Proposal</h5>
+                                                <h5>
+                                                  Improvement Proposal for{' '}
+                                                  <code className="proposal-file">{improvementProposal.file_name}</code>
+                                                </h5>
                                                 <span className={`tag status ${improvementProposal.status.toLowerCase()}`}>
                                                   {improvementProposal.status}
                                                 </span>
                                               </div>
+                                              {improvementProposal.file_name !== selectedArtifact?.file_name && (
+                                                <p className="finding-note">
+                                                  The findings were in{' '}
+                                                  <strong>{improvementProposal.file_name}</strong>, not the selected{' '}
+                                                  {selectedArtifact?.file_name} — accept creates a new version of{' '}
+                                                  {improvementProposal.file_name}.
+                                                </p>
+                                              )}
 
                                               <div className="improvement-explanation">
                                                 <h6>AI Explanation</h6>
                                                 <p>{improvementProposal.explanation}</p>
                                               </div>
+
+                                              {improvementProposal.finding_assessments?.length > 0 && (
+                                                <div className="improvement-findings assessments">
+                                                  <h6>Per-Finding Assessment</h6>
+                                                  <ul>
+                                                    {improvementProposal.finding_assessments.map((a, idx) => (
+                                                      <li key={idx}>
+                                                        <span className={`assessment-tag ${a.classification.toLowerCase()}`}>
+                                                          {a.finding_id} · {a.classification}
+                                                        </span>
+                                                        {a.reasoning && <span className="assessment-reason"> {a.reasoning}</span>}
+                                                      </li>
+                                                    ))}
+                                                  </ul>
+                                                </div>
+                                              )}
+
+                                              {improvementProposal.formatting_notes && improvementProposal.formatting_notes.length > 0 && (
+                                                <div className="improvement-findings formatting-notes">
+                                                  <h6>Formatting Guard</h6>
+                                                  <ul>
+                                                    {improvementProposal.formatting_notes.map((note, idx) => (
+                                                      <li key={idx}>{note}</li>
+                                                    ))}
+                                                  </ul>
+                                                  <p className="finding-note">
+                                                    These whitespace changes were unrelated to any finding and were reverted to
+                                                    your original code before saving the proposal.
+                                                  </p>
+                                                </div>
+                                              )}
 
                                               {improvementProposal.findings_addressed.length > 0 && (
                                                 <div className="improvement-findings">
@@ -1374,7 +1459,7 @@ function App() {
 
                                               {improvementProposal.non_actionable_findings.length > 0 && (
                                                 <div className="improvement-findings non-actionable">
-                                                  <h6>Non-Actionable Findings</h6>
+                                                  <h6>Findings Not Fixed</h6>
                                                   <ul>
                                                     {improvementProposal.non_actionable_findings.map((finding, idx) => (
                                                       <li key={idx}>
@@ -1382,6 +1467,9 @@ function App() {
                                                       </li>
                                                     ))}
                                                   </ul>
+                                                  <p className="finding-note">
+                                                    These are preserved and re-checked on the new version — not deleted or marked resolved.
+                                                  </p>
                                                 </div>
                                               )}
 

@@ -12,6 +12,7 @@ from app.models.code_artifact import (
 )
 from app.models.improvement import (
     CodeImprovementResponse,
+    FindingAssessment,
     FindingComparison,
     ImprovementComparison,
     ImprovementProposal,
@@ -81,6 +82,8 @@ async def create_proposal(
     explanation: str,
     findings_addressed: list[AnalysisFinding],
     non_actionable_findings: list[AnalysisFinding],
+    finding_assessments: Optional[list[FindingAssessment]] = None,
+    formatting_notes: Optional[list[str]] = None,
 ) -> ImprovementProposal:
     """Create and persist an improvement proposal."""
     db = get_db()
@@ -100,6 +103,8 @@ async def create_proposal(
         explanation=explanation,
         findings_addressed=findings_addressed,
         non_actionable_findings=non_actionable_findings,
+        finding_assessments=finding_assessments or [],
+        formatting_notes=formatting_notes or [],
         status="PENDING",
         created_at=now,
         updated_at=now,

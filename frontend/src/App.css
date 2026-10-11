@@ -418,13 +418,15 @@ body {
   color: var(--text-muted);
   font-size: 0.75rem;
 }
-.code-file-button.active, .code-file-button:hover, .version-button:hover {
+.code-file-button.active, .code-file-button:hover, .version-button:hover, .version-button.active {
   border-color: #cfc2ff;
   background: var(--accent-light);
   color: var(--primary);
 }
 .version-heading { margin-top: 12px; }
-.version-button { font-size: 0.8rem; }
+.version-button { font-size: 0.8rem; display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.version-button .version-source { font-size: 0.65rem; color: var(--text-muted); }
+.analysis-scope { display: block; font-size: 0.75rem; color: var(--text-muted); }
 .code-editor {
   min-width: 0;
 }
@@ -853,6 +855,52 @@ body {
 
 .improvement-findings.non-actionable {
   opacity: 0.8;
+}
+
+.improvement-findings.assessments li {
+  margin-bottom: 6px;
+}
+
+.assessment-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  margin-right: 6px;
+  color: #fff;
+}
+
+.assessment-tag.actionable {
+  background: #22c55e;
+}
+
+.assessment-tag.non_actionable {
+  background: #f59e0b;
+}
+
+.assessment-tag.needs_context {
+  background: #6366f1;
+}
+
+.assessment-reason {
+  font-size: 0.82rem;
+  color: var(--text-muted, #6b7280);
+}
+
+.finding-note {
+  margin-top: 6px;
+  font-size: 0.78rem;
+  font-style: italic;
+  color: var(--text-muted, #6b7280);
+}
+
+.improvement-findings.formatting-notes h6 {
+  color: #b45309;
+}
+
+.improvement-findings.formatting-notes ul {
+  color: #92400e;
 }
 
 .improvement-diff {

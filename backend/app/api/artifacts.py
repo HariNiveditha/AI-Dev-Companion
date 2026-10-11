@@ -19,6 +19,7 @@ from app.db.mongodb import get_db
 from app.models.code_artifact import (
     AnalysisFinding,
     AnalysisToolResult,
+    AnalyzedFile,
     CodeArtifact,
     CodeArtifactEdit,
     CompileResult,
@@ -160,6 +161,34 @@ def _latest_artifacts(artifacts: list[dict]) -> list[dict]:
         if not current or artifact.get("version", 0) > current.get("version", 0):
             latest_by_file[artifact["file_name"]] = artifact
     return list(latest_by_file.values())
+
+
+def _build_analysis_snapshot(related: list[dict], selected: dict) -> list[dict]:
+    """Build the set of artifact documents to analyze.
+
+    Static analysis (SpotBugs in particular) needs every Java file in the
+    requirement compiled together, so the snapshot spans the whole requirement.
+    The *selected* artifact's own file uses the exact version the user chose;
+    every other file uses its latest version. This keeps the analysis scoped to
+    what the user selected instead of silently jumping to the newest code.
+    """
+    snapshot_by_file: dict[str, dict] = {
+        item["file_name"]: item for item in _latest_artifacts(related)
+    }
+    # Pin the selected file to the version the user actually asked to analyze.
+    snapshot_by_file[selected["file_name"]] = selected
+    return list(snapshot_by_file.values())
+
+
+def _analyzed_files(snapshot: list[dict]) -> list[AnalyzedFile]:
+    return [
+        AnalyzedFile(
+            artifact_id=item["artifact_id"],
+            file_name=item["file_name"],
+            version=item.get("version", 0),
+        )
+        for item in snapshot
+    ]
 
 
 def _write_sources(temp_dir: str, artifacts: list[dict]) -> list[str]:
@@ -326,12 +355,14 @@ async def analyze_artifact(artifact_id: str):
     related = await db.code_artifacts.find(
         {"project_id": artifact["project_id"], "requirement_id": artifact["requirement_id"], "language": "Java"}
     ).to_list(1000)
-    latest = _latest_artifacts(related)
-    if any(not JAVA_FILE_NAME_PATTERN.fullmatch(item["file_name"]) for item in latest):
+    # Analyze the version the user selected (pinned for its own file), with the
+    # latest version of every other file so the whole requirement still compiles.
+    snapshot = _build_analysis_snapshot(related, artifact)
+    if any(not JAVA_FILE_NAME_PATTERN.fullmatch(item["file_name"]) for item in snapshot):
         raise HTTPException(status_code=400, detail="Artifact contains an unsafe Java filename")
 
     with tempfile.TemporaryDirectory(prefix="ai-se-analysis-") as temp_dir:
-        source_paths = _write_sources(temp_dir, latest)
+        source_paths = _write_sources(temp_dir, snapshot)
         checkstyle = _run_checkstyle(source_paths, temp_dir)
         security = _run_semgrep(temp_dir, source_paths)
         javac_path = shutil.which("javac")
@@ -355,6 +386,8 @@ async def analyze_artifact(artifact_id: str):
     result = StaticAnalysisResult(
         analysis_id=str(uuid4()),
         artifact_id=artifact_id,
+        version=artifact.get("version"),
+        analyzed_files=_analyzed_files(snapshot),
         status=result_status,
         checkstyle=checkstyle,
         spotbugs=spotbugs,

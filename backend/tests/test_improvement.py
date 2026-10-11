@@ -15,7 +15,7 @@ from app.models.code_artifact import (
     CompileResult,
     StaticAnalysisResult,
 )
-from app.models.improvement import CodeImprovementResponse, ImprovementProposal
+from app.models.improvement import CodeImprovementResponse, FindingAssessment, ImprovementProposal
 
 
 @pytest.fixture
@@ -120,9 +120,14 @@ def test_generate_improvement_creates_proposal(client, monkeypatch):
 
     fake_response = CodeImprovementResponse(
         improved_content="package com.example;\n\npublic class LoginService {\n    public boolean login(String user, String pass) {\n        // Fixed indentation\n        return user != null && pass != null;\n    }\n}\n",
-        explanation="Fixed indentation and added null checks.",
-        findings_addressed=["Indentation issue", "Potential null pointer"],
-        non_actionable_findings=[],
+        explanation="Fixed indentation (F1). Left F2 unchanged because DM_EXIT needs lock-ownership context.",
+        findings_addressed=["Indentation issue"],
+        non_actionable_findings=["DM_EXIT cannot be safely fixed without lock context"],
+        addressed_finding_ids=["F1"],
+        finding_assessments=[
+            FindingAssessment(finding_id="F1", classification="ACTIONABLE", reasoning="Indentation fix applied"),
+            FindingAssessment(finding_id="F2", classification="NEEDS_CONTEXT", reasoning="Lock ownership unknown"),
+        ],
     )
     monkeypatch.setattr(
         improvement_routes,
@@ -137,7 +142,11 @@ def test_generate_improvement_creates_proposal(client, monkeypatch):
     assert payload["status"] == "PENDING"
     assert payload["artifact_id"] == "artifact-imp-1"
     assert payload["file_name"] == "LoginService.java"
-    assert len(payload["findings_addressed"]) >= 1
+    # F1 (Indentation) was addressed; F2 (DM_EXIT) is reported honestly.
+    assert len(payload["findings_addressed"]) == 1
+    assert payload["findings_addressed"][0]["rule"] == "Indentation"
+    assert len(payload["non_actionable_findings"]) == 1
+    assert payload["non_actionable_findings"][0]["rule"] == "DM_EXIT"
     assert payload["improved_content"] != payload["original_content"]
 
 
