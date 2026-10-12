@@ -163,12 +163,31 @@ async def generate_improvement(artifact_id: str):
         )
 
     if ai_response.improved_content.strip() == original_target_content.strip():
-        # A no-op response is not proof that every finding is non-actionable.
-        # Report the AI's own per-finding verdicts so the reason is visible.
-        raise HTTPException(
-            status_code=400,
-            detail=_no_change_diagnostic(ai_response, findings_for_ai, target_name),
+        # Valid review, no safe source change: a completed outcome, not an
+        # error. Persist it as a terminal NO_CHANGE proposal so the per-finding
+        # verdicts stay visible. Nothing is addressed (no code changed), every
+        # finding stays on record, and no new artifact version is created.
+        assessments = getattr(ai_response, "finding_assessments", None) or []
+        explanation = (
+            f"Review completed — no source change recommended for {target_name}. "
+            + ai_response.explanation.strip()
         )
+        try:
+            no_change = await create_proposal(
+                artifact_id=improved_artifact_id,
+                improved_content=original_target_content,
+                explanation=explanation,
+                findings_addressed=[],
+                non_actionable_findings=list(finding_ids.values()),
+                finding_assessments=assessments,
+                formatting_notes=[],
+                status="NO_CHANGE",
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to persist proposal: {str(e)}")
+        return no_change
 
     # Structural validation: reject malformed Java before persisting.
     from app.services.java_validator import validate_java_source
@@ -230,36 +249,6 @@ async def generate_improvement(artifact_id: str):
         raise HTTPException(status_code=500, detail=f"Failed to persist proposal: {str(e)}")
 
     return proposal
-
-
-def _no_change_diagnostic(
-    ai_response: "CodeImprovementResponse",
-    findings_for_ai: list[dict],
-    target_name: str = "?",
-) -> str:
-    """Explain why the AI returned unchanged code, from its own verdicts."""
-    by_id = {f["finding_id"]: f for f in findings_for_ai}
-    assessments = getattr(ai_response, "finding_assessments", None) or []
-    if assessments:
-        parts = []
-        for a in assessments:
-            src = by_id.get(a.finding_id, {})
-            label = f"{a.finding_id} ({src.get('file', '?')}:{src.get('line', '?')})"
-            parts.append(f"{label} {a.classification}: {a.reasoning or 'no reason given'}")
-        return (
-            f"AI reviewed every finding but proposed no source change to {target_name}. "
-            "Per-finding verdicts: " + " | ".join(parts)
-        )
-    non_actionable = getattr(ai_response, "non_actionable_findings", None) or []
-    if non_actionable:
-        return (
-            f"AI proposed no source change to {target_name} and classified all findings as "
-            "non-actionable: " + "; ".join(non_actionable)
-        )
-    return (
-        f"AI returned {target_name} unchanged without a per-finding "
-        "explanation. The response was valid but not useful; please regenerate."
-    )
 
 
 def _map_finding_verdicts(

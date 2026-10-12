@@ -240,7 +240,7 @@ interface ImprovementProposal {
   non_actionable_findings: AnalysisFinding[];
   finding_assessments: FindingAssessment[];
   formatting_notes?: string[];
-  status: 'PENDING' | 'ACCEPTED' | 'REJECTED';
+  status: 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'NO_CHANGE';
   compile_result: CompileResult | null;
   after_analysis: StaticAnalysisResult | null;
   accepted_artifact_id: string | null;
@@ -334,6 +334,7 @@ function App() {
   const [improvementProposal, setImprovementProposal] = useState<ImprovementProposal | null>(null);
   const [improvementLoading, setImprovementLoading] = useState(false);
   const [improvementError, setImprovementError] = useState<string | null>(null);
+  const [improvementNotice, setImprovementNotice] = useState<string | null>(null);
   const [improvementDiff, setImprovementDiff] = useState<string>('');
   const [improvementComparison, setImprovementComparison] = useState<ImprovementComparison | null>(null);
   const [acceptingProposal, setAcceptingProposal] = useState(false);
@@ -775,6 +776,7 @@ function App() {
   const generateImprovement = async (artifact: CodeArtifact) => {
     setImprovementLoading(true);
     setImprovementError(null);
+    setImprovementNotice(null);
     setImprovementProposal(null);
     setImprovementDiff('');
     setImprovementComparison(null);
@@ -785,6 +787,13 @@ function App() {
       );
       const proposal: ImprovementProposal = response.data;
       setImprovementProposal(proposal);
+
+      if (proposal.status === 'NO_CHANGE') {
+        // Valid review, no safe source change: informational, not an error.
+        // Verdicts render in the proposal panel below; no diff to fetch.
+        setImprovementNotice('Review completed — no source change recommended.');
+        return;
+      }
 
       // Fetch the diff
       const diffResponse = await axios.get(
@@ -810,6 +819,7 @@ function App() {
   const acceptProposal = async (proposal: ImprovementProposal) => {
     setAcceptingProposal(true);
     setImprovementError(null);
+    setImprovementNotice(null);
 
     try {
       const response = await axios.post(
@@ -855,6 +865,7 @@ function App() {
   const rejectProposal = async (proposal: ImprovementProposal) => {
     setRejectingProposal(true);
     setImprovementError(null);
+    setImprovementNotice(null);
 
     try {
       const response = await axios.post(
@@ -1687,6 +1698,10 @@ function App() {
 
                                           {improvementError && (
                                             <div className="alert error mt-3">{improvementError}</div>
+                                          )}
+
+                                          {improvementNotice && (
+                                            <div className="alert info mt-3">{improvementNotice}</div>
                                           )}
 
                                           {improvementProposal && (

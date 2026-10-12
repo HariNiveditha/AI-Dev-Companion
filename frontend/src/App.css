@@ -161,6 +161,7 @@ body {
 
 .alert.error { background-color: var(--danger); }
 .alert.success { background-color: var(--success); }
+.alert.info { background-color: var(--info); }
 
 .content-body {
   padding: 34px 38px 56px;

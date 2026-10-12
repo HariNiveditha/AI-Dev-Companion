@@ -53,7 +53,7 @@ class ImprovementProposal(BaseModel):
     # Whitespace-only AI changes that the format guard reverted because no
     # finding justified them (surfaced so the reversion is never silent).
     formatting_notes: List[str] = Field(default_factory=list)
-    status: Literal["PENDING", "ACCEPTED", "REJECTED"] = "PENDING"
+    status: Literal["PENDING", "ACCEPTED", "REJECTED", "NO_CHANGE"] = "PENDING"
     compile_result: Optional[CompileResult] = None
     after_analysis: Optional[StaticAnalysisResult] = None
     accepted_artifact_id: Optional[str] = None

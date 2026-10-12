@@ -84,6 +84,7 @@ async def create_proposal(
     non_actionable_findings: list[AnalysisFinding],
     finding_assessments: Optional[list[FindingAssessment]] = None,
     formatting_notes: Optional[list[str]] = None,
+    status: str = "PENDING",
 ) -> ImprovementProposal:
     """Create and persist an improvement proposal."""
     db = get_db()
@@ -105,7 +106,7 @@ async def create_proposal(
         non_actionable_findings=non_actionable_findings,
         finding_assessments=finding_assessments or [],
         formatting_notes=formatting_notes or [],
-        status="PENDING",
+        status=status,
         created_at=now,
         updated_at=now,
     )

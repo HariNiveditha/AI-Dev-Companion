@@ -256,7 +256,8 @@ def test_actionable_finding_produces_proposal_and_maps_by_id(client, monkeypatch
 
 # --- Part 3: no-change vs malformed vs failed must be distinct ---
 
-def test_valid_no_change_response_reports_diagnostic_not_fake_non_actionable(client, monkeypatch):
+def test_valid_no_change_response_returns_no_change_proposal(client, monkeypatch):
+    """A valid review with no safe change is a 200 NO_CHANGE proposal, not an error."""
     _reset()
     db = get_db()
     _requirement(db)
@@ -278,14 +279,32 @@ def test_valid_no_change_response_reports_diagnostic_not_fake_non_actionable(cli
     _capture(monkeypatch, response)
 
     resp = client.post(f"/improvements/generate?artifact_id={ids['User.java']}")
-    assert resp.status_code == 400
-    detail = resp.json()["detail"]
-    # The diagnostic must come from the AI's own verdicts, not a blanket guess.
-    assert "NEEDS_CONTEXT" in detail
-    assert "NON_ACTIONABLE" in detail
-    # Nothing was persisted as a proposal.
-    proposals = asyncio.run(db.improvement_proposals.find({}).to_list(10))
-    assert proposals == []
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "NO_CHANGE"
+    assert payload["improved_content"] == payload["original_content"]
+    # The AI's own verdicts stay visible on the persisted record.
+    verdicts = {a["finding_id"]: a for a in payload["finding_assessments"]}
+    assert verdicts["F1"]["classification"] == "NEEDS_CONTEXT"
+    assert verdicts["F2"]["classification"] == "NON_ACTIONABLE"
+    assert "Intentional throw." in verdicts["F2"]["reasoning"]
+    # Nothing was addressed (no code changed); every finding stays on record.
+    assert payload["findings_addressed"] == []
+    assert len(payload["non_actionable_findings"]) == 2
+    # No new artifact version was created.
+    versions = asyncio.run(
+        db.code_artifacts.find({"file_name": "User.java"}).to_list(10)
+    )
+    assert len(versions) == 1
+    # The analyzer findings themselves are untouched.
+    analysis = asyncio.run(
+        db.static_analysis_results.find_one({"artifact_id": ids["User.java"]})
+    )
+    total = sum(
+        len((analysis.get(tool) or {}).get("findings", []))
+        for tool in ("checkstyle", "spotbugs", "security")
+    )
+    assert total == 2
 
 
 def test_malformed_ai_response_is_not_treated_as_non_actionable(client, monkeypatch):
@@ -452,7 +471,7 @@ def test_unknown_target_file_falls_back_to_selected_artifact(client, monkeypatch
 
 
 def test_no_change_guard_compares_against_target_file_not_selection(client, monkeypatch):
-    """An unchanged response for the AI's target file is caught, not the selection's."""
+    """An unchanged response for the AI's target file returns NO_CHANGE for that file."""
     _reset()
     db = get_db()
     _requirement(db)
@@ -464,11 +483,21 @@ def test_no_change_guard_compares_against_target_file_not_selection(client, monk
     _capture(monkeypatch, response)
 
     resp = client.post(f"/improvements/generate?artifact_id={ids['AuthService.java']}")
-    assert resp.status_code == 400
-    detail = resp.json()["detail"]
-    assert "User.java" in detail
-    assert "ACTIONABLE" in detail  # comes from the AI's own verdicts
-    assert asyncio.run(db.improvement_proposals.find({}).to_list(10)) == []
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "NO_CHANGE"
+    assert payload["file_name"] == "User.java"
+    assert payload["artifact_id"] == ids["User.java"]
+    # The AI's own verdicts travel on the record, not in an error message.
+    assert any(
+        a["classification"] == "ACTIONABLE" for a in payload["finding_assessments"]
+    )
+    # ...but nothing counts as addressed: no code changed, so nothing was fixed,
+    # even though the AI labeled F1 ACTIONABLE.
+    assert payload["findings_addressed"] == []
+    assert len(payload["non_actionable_findings"]) == 2
+    # No new version of either file was created.
+    assert asyncio.run(db.code_artifacts.count_documents({})) == 3
 
 
 def test_accept_cross_file_proposal_versions_target_file_and_keeps_history(client, monkeypatch):
@@ -706,3 +735,83 @@ def test_only_whitespace_changes_is_rejected_not_persisted(client, monkeypatch):
     assert resp.status_code == 502
     assert "formatting changes" in resp.json()["detail"]
     assert asyncio.run(db.improvement_proposals.find({}).to_list(10)) == []
+
+
+# --- Part 4: NO_CHANGE proposals are terminal records, never new versions ---
+
+def _no_change_proposal_id(client, monkeypatch, db, ids):
+    """Generate a NO_CHANGE proposal via mocked AI; return its proposal_id."""
+    response = CodeImprovementResponse(
+        improved_content=USER_SRC,
+        explanation="Could not safely change.",
+        findings_addressed=[],
+        non_actionable_findings=[],
+        addressed_finding_ids=[],
+        finding_assessments=[
+            FindingAssessment(finding_id="F1", classification="NON_ACTIONABLE", reasoning="Style only."),
+            FindingAssessment(finding_id="F2", classification="NON_ACTIONABLE", reasoning="Intentional throw."),
+        ],
+    )
+    _capture(monkeypatch, response)
+    resp = client.post(f"/improvements/generate?artifact_id={ids['User.java']}")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "NO_CHANGE"
+    return resp.json()["proposal_id"]
+
+
+def test_no_change_proposal_cannot_be_accepted(client, monkeypatch):
+    _reset()
+    db = get_db()
+    _requirement(db)
+    ids = _three_artifacts(db)
+    _cross_file_analysis(db, ids["User.java"], ids)
+
+    proposal_id = _no_change_proposal_id(client, monkeypatch, db, ids)
+
+    resp = client.post(f"/improvements/{proposal_id}/accept")
+    assert resp.status_code == 409
+    assert "no_change" in resp.json()["detail"].lower()
+
+    # No new artifact version was created and the record is untouched.
+    assert asyncio.run(db.code_artifacts.count_documents({})) == 3
+    stored = asyncio.run(
+        db.improvement_proposals.find_one({"proposal_id": proposal_id})
+    )
+    assert stored["status"] == "NO_CHANGE"
+    assert stored["accepted_artifact_id"] is None
+
+
+def test_no_change_proposal_cannot_be_rejected(client, monkeypatch):
+    _reset()
+    db = get_db()
+    _requirement(db)
+    ids = _three_artifacts(db)
+    _cross_file_analysis(db, ids["User.java"], ids)
+
+    proposal_id = _no_change_proposal_id(client, monkeypatch, db, ids)
+
+    resp = client.post(f"/improvements/{proposal_id}/reject")
+    assert resp.status_code == 409
+
+    stored = asyncio.run(
+        db.improvement_proposals.find_one({"proposal_id": proposal_id})
+    )
+    assert stored["status"] == "NO_CHANGE"
+
+
+def test_no_change_proposal_is_retrievable_with_verdicts(client, monkeypatch):
+    _reset()
+    db = get_db()
+    _requirement(db)
+    ids = _three_artifacts(db)
+    _cross_file_analysis(db, ids["User.java"], ids)
+
+    proposal_id = _no_change_proposal_id(client, monkeypatch, db, ids)
+
+    resp = client.get(f"/improvements/{proposal_id}")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "NO_CHANGE"
+    # NON_ACTIONABLE findings remain visible on the record.
+    assert len(payload["non_actionable_findings"]) == 2
+    assert len(payload["finding_assessments"]) == 2
