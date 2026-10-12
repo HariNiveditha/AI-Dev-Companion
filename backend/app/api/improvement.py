@@ -26,6 +26,7 @@ from app.models.improvement import (
     CodeImprovementResponse,
     ImprovementComparison,
     ImprovementProposal,
+    ReviewDecisionRequest,
 )
 from app.services.ai.service import generate_code_improvement
 from app.services.improvement import (
@@ -35,6 +36,7 @@ from app.services.improvement import (
     generate_diff,
     get_comparison,
     get_proposal,
+    list_proposals,
     reject_proposal,
 )
 
@@ -331,6 +333,20 @@ async def _analyzed_artifact_ids(analysis: dict, artifact: dict) -> dict[str, st
     return ids
 
 
+@router.get("", response_model=list[ImprovementProposal])
+async def list_improvement_proposals(
+    artifact_id: Optional[str] = None,
+    requirement_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+):
+    """Retrieve improvement proposals with optional filtering."""
+    return await list_proposals(
+        artifact_id=artifact_id,
+        requirement_id=requirement_id,
+        project_id=project_id,
+    )
+
+
 @router.get("/{proposal_id}", response_model=ImprovementProposal)
 async def get_improvement_proposal(proposal_id: str):
     """Retrieve an improvement proposal by ID."""
@@ -341,15 +357,21 @@ async def get_improvement_proposal(proposal_id: str):
 
 
 @router.post("/{proposal_id}/accept", response_model=ImprovementProposal)
-async def accept_improvement(proposal_id: str):
+async def accept_improvement(
+    proposal_id: str,
+    review_req: Optional[ReviewDecisionRequest] = None,
+):
     """
     Accept an improvement proposal and create a new artifact version.
 
     After acceptance:
-    1. Creates a new artifact version with improved content
-    2. Compiles the new version
-    3. Runs static analysis on the new version
-    4. Returns the updated proposal with results
+    1. Validates proposal is pending and not terminal
+    2. Validates target artifact exists and has not changed or evolved to a newer version
+    3. Runs Java structural validation on the proposed content
+    4. Creates a new artifact version with improved content
+    5. Compiles the new version
+    6. Runs static analysis on the new version
+    7. Persists review metadata and returns the updated proposal with results
     """
     db = get_db()
 
@@ -380,9 +402,40 @@ async def accept_improvement(proposal_id: str):
             detail="Original artifact has changed since the proposal was generated. Please generate a new proposal.",
         )
 
+    # Check if a newer version of the target file was created after this proposal
+    latest_docs = await db.code_artifacts.find(
+        {
+            "project_id": proposal.project_id,
+            "requirement_id": proposal.requirement_id,
+            "file_name": proposal.file_name,
+        }
+    ).sort("version", -1).to_list(1)
+    latest_version = latest_docs[0]["version"] if latest_docs else 0
+    if latest_version > original_artifact.get("version", 0):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Target artifact has evolved to version {latest_version} (proposal was based on version {original_artifact.get('version', 0)}). Please generate a new proposal.",
+        )
+
+    # Validate Java syntax/structure before accepting
+    from app.services.java_validator import validate_java_source
+    validation = validate_java_source(proposal.improved_content)
+    if not validation.ok:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Proposed changes failed Java structural validation: {'; '.join(validation.errors)}",
+        )
+
+    comment = review_req.comment if review_req else None
+    reviewer = review_req.reviewer if review_req else "local-developer"
+
     # Accept the proposal and create new artifact version
     try:
-        accepted = await accept_proposal(proposal_id)
+        accepted = await accept_proposal(
+            proposal_id,
+            comment=comment,
+            reviewer=reviewer,
+        )
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
 
@@ -412,7 +465,10 @@ async def accept_improvement(proposal_id: str):
 
 
 @router.post("/{proposal_id}/reject", response_model=ImprovementProposal)
-async def reject_improvement(proposal_id: str):
+async def reject_improvement(
+    proposal_id: str,
+    review_req: Optional[ReviewDecisionRequest] = None,
+):
     """Reject an improvement proposal without modifying any artifacts."""
     proposal = await get_proposal(proposal_id)
     if not proposal:
@@ -424,8 +480,15 @@ async def reject_improvement(proposal_id: str):
             detail=f"Proposal has already been {proposal.status.lower()}",
         )
 
+    comment = review_req.comment if review_req else None
+    reviewer = review_req.reviewer if review_req else "local-developer"
+
     try:
-        rejected = await reject_proposal(proposal_id)
+        rejected = await reject_proposal(
+            proposal_id,
+            comment=comment,
+            reviewer=reviewer,
+        )
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
 

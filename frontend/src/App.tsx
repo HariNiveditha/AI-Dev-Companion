@@ -241,6 +241,11 @@ interface ImprovementProposal {
   finding_assessments: FindingAssessment[];
   formatting_notes?: string[];
   status: 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'NO_CHANGE';
+  source_version?: number | null;
+  review_comment?: string | null;
+  reviewer?: string | null;
+  review_action?: 'APPROVE' | 'REJECT' | 'NO_CHANGE' | null;
+  decision_timestamp?: string | null;
   compile_result: CompileResult | null;
   after_analysis: StaticAnalysisResult | null;
   accepted_artifact_id: string | null;
@@ -339,6 +344,10 @@ function App() {
   const [improvementComparison, setImprovementComparison] = useState<ImprovementComparison | null>(null);
   const [acceptingProposal, setAcceptingProposal] = useState(false);
   const [rejectingProposal, setRejectingProposal] = useState(false);
+  const [proposalHistory, setProposalHistory] = useState<ImprovementProposal[]>([]);
+  const [reviewComment, setReviewComment] = useState<string>('');
+  const [confirmAction, setConfirmAction] = useState<'APPROVE' | 'REJECT' | null>(null);
+  const [expandedFindings, setExpandedFindings] = useState<Record<string, boolean>>({});
 
   // Notifications
   const notifyError = (msg: string) => {
@@ -437,6 +446,72 @@ function App() {
   const selectArtifact = (artifact: CodeArtifact) => {
     setSelectedArtifactId(artifact.artifact_id);
     setDraftArtifactContent(artifact.content);
+    setReviewComment('');
+    setConfirmAction(null);
+    fetchProposalHistory(artifact.artifact_id);
+  };
+
+  const fetchProposalHistory = async (artifactId: string) => {
+    try {
+      const res = await axios.get<ImprovementProposal[]>(`${API_URL}/improvements?artifact_id=${artifactId}`);
+      setProposalHistory(res.data);
+      if (res.data.length > 0) {
+        const latest = res.data[0];
+        setImprovementProposal(latest);
+        if (latest.status !== 'NO_CHANGE') {
+          try {
+            const diffRes = await axios.get(`${API_URL}/improvements/${latest.proposal_id}/diff`);
+            setImprovementDiff(diffRes.data.diff);
+          } catch {
+            setImprovementDiff('');
+          }
+        } else {
+          setImprovementDiff('');
+        }
+        if (latest.status === 'ACCEPTED') {
+          try {
+            const compRes = await axios.get(`${API_URL}/improvements/${latest.proposal_id}/comparison`);
+            setImprovementComparison(compRes.data);
+          } catch {
+            setImprovementComparison(null);
+          }
+        } else {
+          setImprovementComparison(null);
+        }
+      } else {
+        setImprovementProposal(null);
+        setImprovementDiff('');
+        setImprovementComparison(null);
+      }
+    } catch {
+      setProposalHistory([]);
+    }
+  };
+
+  const selectProposal = async (proposal: ImprovementProposal) => {
+    setImprovementProposal(proposal);
+    setReviewComment('');
+    setConfirmAction(null);
+    if (proposal.status !== 'NO_CHANGE') {
+      try {
+        const diffRes = await axios.get(`${API_URL}/improvements/${proposal.proposal_id}/diff`);
+        setImprovementDiff(diffRes.data.diff);
+      } catch {
+        setImprovementDiff('');
+      }
+    } else {
+      setImprovementDiff('');
+    }
+    if (proposal.status === 'ACCEPTED') {
+      try {
+        const compRes = await axios.get(`${API_URL}/improvements/${proposal.proposal_id}/comparison`);
+        setImprovementComparison(compRes.data);
+      } catch {
+        setImprovementComparison(null);
+      }
+    } else {
+      setImprovementComparison(null);
+    }
   };
 
   const saveArtifact = async (artifact: CodeArtifact) => {
@@ -780,6 +855,8 @@ function App() {
     setImprovementProposal(null);
     setImprovementDiff('');
     setImprovementComparison(null);
+    setReviewComment('');
+    setConfirmAction(null);
 
     try {
       const response = await axios.post(
@@ -787,6 +864,8 @@ function App() {
       );
       const proposal: ImprovementProposal = response.data;
       setImprovementProposal(proposal);
+
+      await fetchProposalHistory(artifact.artifact_id);
 
       if (proposal.status === 'NO_CHANGE') {
         // Valid review, no safe source change: informational, not an error.
@@ -823,10 +902,16 @@ function App() {
 
     try {
       const response = await axios.post(
-        `${API_URL}/improvements/${proposal.proposal_id}/accept`
+        `${API_URL}/improvements/${proposal.proposal_id}/accept`,
+        {
+          comment: reviewComment.trim() || undefined,
+          reviewer: 'local-developer',
+        }
       );
       const updatedProposal: ImprovementProposal = response.data;
       setImprovementProposal(updatedProposal);
+      setReviewComment('');
+      setConfirmAction(null);
 
       // Refresh the authoritative artifact list from MongoDB so the
       // Files and Versions panels immediately show the newly accepted
@@ -841,13 +926,16 @@ function App() {
         }
       }
 
+      // Refresh proposal history
+      await fetchProposalHistory(proposal.artifact_id);
+
       // Fetch comparison
       const comparisonResponse = await axios.get(
         `${API_URL}/improvements/${proposal.proposal_id}/comparison`
       );
       setImprovementComparison(comparisonResponse.data);
 
-      notifySuccess('Changes accepted. New artifact version created and verified.');
+      notifySuccess('Changes approved & accepted. New artifact version created and verified.');
     } catch (err: any) {
       if (!err.response) {
         notifyError('Backend unavailable. Start the API and try again.');
@@ -869,10 +957,20 @@ function App() {
 
     try {
       const response = await axios.post(
-        `${API_URL}/improvements/${proposal.proposal_id}/reject`
+        `${API_URL}/improvements/${proposal.proposal_id}/reject`,
+        {
+          comment: reviewComment.trim() || undefined,
+          reviewer: 'local-developer',
+        }
       );
       const updatedProposal: ImprovementProposal = response.data;
       setImprovementProposal(updatedProposal);
+      setReviewComment('');
+      setConfirmAction(null);
+
+      // Refresh proposal history
+      await fetchProposalHistory(proposal.artifact_id);
+
       notifySuccess('Proposal rejected. Original artifact preserved.');
     } catch (err: any) {
       if (!err.response) {
@@ -1468,7 +1566,8 @@ function App() {
                                     <textarea
                                       value={executableTestDraft}
                                       onChange={event => setExecutableTestDraft(event.target.value)}
-                                      spellCheck={false}
+          className="exec-test-textarea"
+          spellCheck={false}
                                     />
                                   </>
                                 )}
@@ -1704,17 +1803,96 @@ function App() {
                                             <div className="alert info mt-3">{improvementNotice}</div>
                                           )}
 
+                                          {proposalHistory.length > 1 && (
+                                            <div className="proposal-history-selector mt-3">
+                                              <span className="history-selector-label">Review History ({proposalHistory.length}):</span>
+                                              <div className="history-buttons">
+                                                {proposalHistory.map((p, idx) => (
+                                                  <button
+                                                    key={p.proposal_id}
+                                                    className={`btn-history-pill ${improvementProposal?.proposal_id === p.proposal_id ? 'active' : ''}`}
+                                                    onClick={() => selectProposal(p)}
+                                                  >
+                                                    #{proposalHistory.length - idx} <span className={`tag-micro ${p.status.toLowerCase()}`}>{p.status}</span>
+                                                  </button>
+                                                ))}
+                                              </div>
+                                            </div>
+                                          )}
+
                                           {improvementProposal && (
                                             <div className="improvement-proposal mt-3">
-                                              <div className="improvement-proposal-header">
-                                                <h5>
-                                                  Improvement Proposal for{' '}
-                                                  <code className="proposal-file">{improvementProposal.file_name}</code>
-                                                </h5>
+                                              {/* HITL Review Status Banner */}
+                                              {improvementProposal.status === 'PENDING' && (
+                                                <div className="hitl-banner pending">
+                                                  <span className="hitl-banner-badge">DECISION PENDING</span>
+                                                  <div>
+                                                    <strong>Human-in-the-Loop Review Required</strong>
+                                                    <p>Inspect findings, assessments, and proposed code diff below before approving or rejecting.</p>
+                                                  </div>
+                                                </div>
+                                              )}
+
+                                              {improvementProposal.status === 'ACCEPTED' && (
+                                                <div className="hitl-banner accepted">
+                                                  <span className="hitl-banner-badge">ACCEPTED</span>
+                                                  <div>
+                                                    <strong>Proposal Approved &amp; Applied</strong>
+                                                    <p>
+                                                      Approved by <strong>{improvementProposal.reviewer || 'Local Developer'}</strong>
+                                                      {improvementProposal.decision_timestamp || improvementProposal.accepted_at ? ` on ${new Date(improvementProposal.decision_timestamp || improvementProposal.accepted_at!).toLocaleString()}` : ''}.
+                                                      Created artifact version <strong>v{improvementProposal.accepted_version}</strong>.
+                                                    </p>
+                                                  </div>
+                                                </div>
+                                              )}
+
+                                              {improvementProposal.status === 'REJECTED' && (
+                                                <div className="hitl-banner rejected">
+                                                  <span className="hitl-banner-badge">REJECTED</span>
+                                                  <div>
+                                                    <strong>Proposal Rejected</strong>
+                                                    <p>
+                                                      Rejected by <strong>{improvementProposal.reviewer || 'Local Developer'}</strong>
+                                                      {improvementProposal.decision_timestamp || improvementProposal.rejected_at ? ` on ${new Date(improvementProposal.decision_timestamp || improvementProposal.rejected_at!).toLocaleString()}` : ''}.
+                                                      Original code was preserved without modification.
+                                                    </p>
+                                                  </div>
+                                                </div>
+                                              )}
+
+                                              {improvementProposal.status === 'NO_CHANGE' && (
+                                                <div className="hitl-banner no-change">
+                                                  <span className="hitl-banner-badge">NO CHANGE</span>
+                                                  <div>
+                                                    <strong>Review Completed — No Modification Recommended</strong>
+                                                    <p>The AI reviewed findings and determined no safe code modifications are required. This record is read-only.</p>
+                                                  </div>
+                                                </div>
+                                              )}
+
+                                              <div className="improvement-proposal-header mt-2">
+                                                <div>
+                                                  <h5>
+                                                    Improvement Proposal for{' '}
+                                                    <code className="proposal-file">{improvementProposal.file_name}</code>
+                                                  </h5>
+                                                  <span className="proposal-target-version">
+                                                    Target file: {improvementProposal.file_name} (base v{improvementProposal.source_version ?? selectedArtifact?.version ?? 1})
+                                                  </span>
+                                                </div>
                                                 <span className={`tag status ${improvementProposal.status.toLowerCase()}`}>
                                                   {improvementProposal.status}
                                                 </span>
                                               </div>
+
+                                              {improvementProposal.review_comment && (
+                                                <div className="reviewer-comment-box mt-2">
+                                                  <h6>Reviewer Comment / Rationale</h6>
+                                                  <p>{improvementProposal.review_comment}</p>
+                                                  <small>Decision recorded: {improvementProposal.reviewer || 'Local Developer'} · {new Date(improvementProposal.decision_timestamp || improvementProposal.updated_at).toLocaleString()}</small>
+                                                </div>
+                                              )}
                                               {improvementProposal.file_name !== selectedArtifact?.file_name && (
                                                 <p className="finding-note">
                                                   The findings were in{' '}
@@ -1731,14 +1909,32 @@ function App() {
 
                                               {improvementProposal.finding_assessments?.length > 0 && (
                                                 <div className="improvement-findings assessments">
-                                                  <h6>Per-Finding Assessment</h6>
+                                                  <h6>Per-Finding Assessments ({improvementProposal.finding_assessments.length})</h6>
+                                                  <p className="finding-honest-note">
+                                                    Verdicts below reflect the AI review. Findings are genuinely resolved only after re-analysis on accepted source confirms it. Non-actionable and needs-context findings are preserved and never suppressed.
+                                                  </p>
                                                   <ul>
                                                     {improvementProposal.finding_assessments.map((a, idx) => (
-                                                      <li key={idx}>
-                                                        <span className={`assessment-tag ${a.classification.toLowerCase()}`}>
-                                                          {a.finding_id} · {a.classification}
-                                                        </span>
-                                                        {a.reasoning && <span className="assessment-reason"> {a.reasoning}</span>}
+                                                      <li key={idx} className="assessment-item">
+                                                        <div
+                                                          className="assessment-item-header"
+                                                          onClick={() => setExpandedFindings(curr => ({
+                                                            ...curr,
+                                                            [`${improvementProposal.proposal_id}-${a.finding_id}`]: !curr[`${improvementProposal.proposal_id}-${a.finding_id}`],
+                                                          }))}
+                                                        >
+                                                          <span className={`assessment-tag ${a.classification.toLowerCase()}`}>
+                                                            {a.finding_id} · {a.classification}
+                                                          </span>
+                                                          <span className="assessment-toggle-hint">
+                                                            {expandedFindings[`${improvementProposal.proposal_id}-${a.finding_id}`] ? '▲ Hide reasoning' : '▼ View reasoning'}
+                                                          </span>
+                                                        </div>
+                                                        {expandedFindings[`${improvementProposal.proposal_id}-${a.finding_id}`] && a.reasoning && (
+                                                          <div className="assessment-detail-body">
+                                                            <strong>AI Assessment Rationale:</strong> {a.reasoning}
+                                                          </div>
+                                                        )}
                                                       </li>
                                                     ))}
                                                   </ul>
@@ -1796,22 +1992,84 @@ function App() {
                                                 </div>
                                               )}
 
+                                              {/* Reviewer Action Controls (for PENDING proposals) */}
                                               {improvementProposal.status === 'PENDING' && (
-                                                <div className="improvement-actions">
-                                                  <button
-                                                    className="btn-success"
-                                                    onClick={() => acceptProposal(improvementProposal)}
-                                                    disabled={acceptingProposal}
-                                                  >
-                                                    {acceptingProposal ? 'Accepting...' : 'Accept Changes'}
-                                                  </button>
-                                                  <button
-                                                    className="btn-secondary"
-                                                    onClick={() => rejectProposal(improvementProposal)}
-                                                    disabled={rejectingProposal}
-                                                  >
-                                                    {rejectingProposal ? 'Rejecting...' : 'Reject Changes'}
-                                                  </button>
+                                                <div className="hitl-decision-panel mt-3">
+                                                  <h6>Human Review Decision</h6>
+                                                  <div className="form-group mb-3">
+                                                    <label htmlFor="review-comment-input">Reviewer Feedback / Decision Notes (optional):</label>
+                                                    <textarea
+                                                      id="review-comment-input"
+                                                      className="review-comment-input"
+                                                      placeholder="Enter optional comments or rationale for your approval/rejection..."
+                                                      value={reviewComment}
+                                                      onChange={e => setReviewComment(e.target.value)}
+                                                      rows={2}
+                                                    />
+                                                  </div>
+
+                                                  {confirmAction === null ? (
+                                                    <div className="improvement-actions">
+                                                      <button
+                                                        className="btn-success"
+                                                        onClick={() => setConfirmAction('APPROVE')}
+                                                        disabled={acceptingProposal || rejectingProposal}
+                                                      >
+                                                        Approve Changes...
+                                                      </button>
+                                                      <button
+                                                        className="btn-secondary"
+                                                        onClick={() => setConfirmAction('REJECT')}
+                                                        disabled={acceptingProposal || rejectingProposal}
+                                                      >
+                                                        Reject Proposal...
+                                                      </button>
+                                                    </div>
+                                                  ) : confirmAction === 'APPROVE' ? (
+                                                    <div className="confirm-decision-box approve-box">
+                                                      <p>
+                                                        <strong>Confirm Approval:</strong> Approving will create a new artifact version for <code>{improvementProposal.file_name}</code>, run Java structural validation and formatting guard, compile the new version, and run static analysis verification. Previous versions remain preserved.
+                                                      </p>
+                                                      <div className="confirm-buttons">
+                                                        <button
+                                                          className="btn-success"
+                                                          onClick={() => acceptProposal(improvementProposal)}
+                                                          disabled={acceptingProposal}
+                                                        >
+                                                          {acceptingProposal ? 'Applying & Verifying...' : 'Confirm Approval & Apply'}
+                                                        </button>
+                                                        <button
+                                                          className="btn-outline"
+                                                          onClick={() => setConfirmAction(null)}
+                                                          disabled={acceptingProposal}
+                                                        >
+                                                          Cancel
+                                                        </button>
+                                                      </div>
+                                                    </div>
+                                                  ) : (
+                                                    <div className="confirm-decision-box reject-box">
+                                                      <p>
+                                                        <strong>Confirm Rejection:</strong> Rejecting will mark this proposal as REJECTED. No files will be modified and no new versions will be created.
+                                                      </p>
+                                                      <div className="confirm-buttons">
+                                                        <button
+                                                          className="btn-danger"
+                                                          onClick={() => rejectProposal(improvementProposal)}
+                                                          disabled={rejectingProposal}
+                                                        >
+                                                          {rejectingProposal ? 'Rejecting...' : 'Confirm Rejection'}
+                                                        </button>
+                                                        <button
+                                                          className="btn-outline"
+                                                          onClick={() => setConfirmAction(null)}
+                                                          disabled={rejectingProposal}
+                                                        >
+                                                          Cancel
+                                                        </button>
+                                                      </div>
+                                                    </div>
+                                                  )}
                                                 </div>
                                               )}
 

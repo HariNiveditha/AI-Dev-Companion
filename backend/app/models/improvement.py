@@ -56,12 +56,24 @@ class ImprovementProposal(BaseModel):
     status: Literal["PENDING", "ACCEPTED", "REJECTED", "NO_CHANGE"] = "PENDING"
     compile_result: Optional[CompileResult] = None
     after_analysis: Optional[StaticAnalysisResult] = None
+    source_version: Optional[int] = None
+    review_comment: Optional[str] = None
+    reviewer: Optional[str] = None
+    review_action: Optional[Literal["APPROVE", "REJECT", "NO_CHANGE"]] = None
+    decision_timestamp: Optional[datetime] = None
     accepted_artifact_id: Optional[str] = None
     accepted_version: Optional[int] = None
     created_at: datetime
     updated_at: datetime
     accepted_at: Optional[datetime] = None
     rejected_at: Optional[datetime] = None
+
+
+class ReviewDecisionRequest(BaseModel):
+    """Payload for human reviewer decision (approve/reject)."""
+
+    comment: Optional[str] = None
+    reviewer: Optional[str] = "local-developer"
 
 
 class FindingComparison(BaseModel):

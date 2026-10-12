@@ -107,6 +107,10 @@ async def create_proposal(
         finding_assessments=finding_assessments or [],
         formatting_notes=formatting_notes or [],
         status=status,
+        source_version=artifact.get("version", 1),
+        review_action="NO_CHANGE" if status == "NO_CHANGE" else None,
+        reviewer="ai-review" if status == "NO_CHANGE" else None,
+        decision_timestamp=now if status == "NO_CHANGE" else None,
         created_at=now,
         updated_at=now,
     )
@@ -124,10 +128,32 @@ async def get_proposal(proposal_id: str) -> Optional[ImprovementProposal]:
     return ImprovementProposal.model_validate(data)
 
 
+async def list_proposals(
+    artifact_id: Optional[str] = None,
+    requirement_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+) -> list[ImprovementProposal]:
+    """Retrieve improvement proposals matching filters, sorted newest first."""
+    db = get_db()
+    query = {}
+    if artifact_id:
+        query["artifact_id"] = artifact_id
+    if requirement_id:
+        query["requirement_id"] = requirement_id
+    if project_id:
+        query["project_id"] = project_id
+
+    cursor = db.improvement_proposals.find(query).sort("created_at", -1)
+    docs = await cursor.to_list(100)
+    return [ImprovementProposal.model_validate(doc) for doc in docs]
+
+
 async def accept_proposal(
     proposal_id: str,
     compile_result: Optional[CompileResult] = None,
     after_analysis: Optional[StaticAnalysisResult] = None,
+    comment: Optional[str] = None,
+    reviewer: Optional[str] = "local-developer",
 ) -> ImprovementProposal:
     """
     Accept an improvement proposal and create a new artifact version.
@@ -136,7 +162,7 @@ async def accept_proposal(
     1. Verifies the proposal is in PENDING status
     2. Creates a new artifact version with the improved content
     3. Marks the proposal as ACCEPTED
-    4. Stores compilation and analysis results
+    4. Stores review metadata, compilation and analysis results
     """
     db = get_db()
     proposal_data = await db.improvement_proposals.find_one({"proposal_id": proposal_id})
@@ -190,6 +216,10 @@ async def accept_proposal(
         {
             "$set": {
                 "status": "ACCEPTED",
+                "review_action": "APPROVE",
+                "review_comment": comment,
+                "reviewer": reviewer or "local-developer",
+                "decision_timestamp": now,
                 "accepted_artifact_id": new_artifact.artifact_id,
                 "accepted_version": next_version,
                 "compile_result": compile_result.model_dump() if compile_result else None,
@@ -205,7 +235,11 @@ async def accept_proposal(
     return ImprovementProposal.model_validate(updated)
 
 
-async def reject_proposal(proposal_id: str) -> ImprovementProposal:
+async def reject_proposal(
+    proposal_id: str,
+    comment: Optional[str] = None,
+    reviewer: Optional[str] = "local-developer",
+) -> ImprovementProposal:
     """Reject an improvement proposal without modifying any artifacts."""
     db = get_db()
     proposal_data = await db.improvement_proposals.find_one({"proposal_id": proposal_id})
@@ -222,6 +256,10 @@ async def reject_proposal(proposal_id: str) -> ImprovementProposal:
         {
             "$set": {
                 "status": "REJECTED",
+                "review_action": "REJECT",
+                "review_comment": comment,
+                "reviewer": reviewer or "local-developer",
+                "decision_timestamp": now,
                 "rejected_at": now,
                 "updated_at": now,
             }
