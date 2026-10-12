@@ -17,12 +17,25 @@ from app.api.improvement import router as improvement_router
 
 # Database connection
 from app.db.mongodb import connect_to_mongo, close_mongo_connection
+from app.api.executions import reconcile_interrupted_executions
 
 
 @contextlib.asynccontextmanager
 async def lifespan(_: FastAPI):
     await connect_to_mongo()
     try:
+        # A PENDING/RUNNING execution can only exist if the backend died
+        # mid-run (executions run synchronously). Mark them ERROR so no
+        # record is ever left looking queued forever.
+        try:
+            interrupted = await reconcile_interrupted_executions()
+            if interrupted:
+                print(
+                    f"⚠️  Marked {interrupted} interrupted execution(s) as ERROR "
+                    "(interrupted by a backend restart)."
+                )
+        except Exception as exc:  # reconciliation must never block startup
+            print(f"⚠️  Could not reconcile interrupted executions: {type(exc).__name__}")
         yield
     finally:
         await close_mongo_connection()

@@ -1,7 +1,7 @@
 
 from app.models.requirement import RequirementAnalysis
 from app.models.code_artifact import GeneratedCodeResponse
-from app.models.test_case import TestCaseGenerationResponse
+from app.models.test_case import TestCaseGenerationResponse, ExecutableTestGenerationResponse
 from app.models.improvement import CodeImprovementResponse
 
 from .provider import AIProvider
@@ -10,6 +10,7 @@ from .prompts import (
     get_code_generation_prompt,
     get_test_case_generation_prompt,
     get_code_improvement_prompt,
+    get_executable_test_prompt,
 )
 
 
@@ -48,6 +49,21 @@ def generate_test_cases(
     provider = AIProvider()
     return provider.generate_test_cases(
         prompt, TestCaseGenerationResponse
+    )
+
+
+def generate_executable_test_source(
+    title: str,
+    description: str,
+    test_cases: list[dict],
+    source_files: dict[str, str],
+) -> ExecutableTestGenerationResponse:
+    prompt = get_executable_test_prompt(
+        title, description, test_cases, source_files
+    )
+    provider = AIProvider()
+    return provider.generate_code(
+        prompt, ExecutableTestGenerationResponse
     )
 
 

@@ -100,6 +100,56 @@ Requirement Analysis:
 """
 
 
+def get_executable_test_prompt(
+        title: str,
+        description: str,
+        test_cases: list[dict],
+        source_files: dict[str, str],
+) -> str:
+    import json
+
+    cases_json = json.dumps(test_cases, indent=2)
+
+    rendered_files = []
+    for file_name, content in source_files.items():
+        rendered_files.append(
+            f"### File: {file_name}\n```java\n{content}\n```"
+        )
+    files_block = "\n\n".join(rendered_files)
+
+    return f"""You are an expert Java test engineer.
+Write ONE complete JUnit 5 test class that implements the descriptive test cases below against the provided production sources.
+
+## Hard rules
+- JUnit 5 only: import org.junit.jupiter.api.Test and org.junit.jupiter.api.Assertions.*
+- The class must compile against the production sources shown below. Do not invent APIs that do not exist in those sources.
+- Exactly one public @Test method per test case id. Method names must be valid Java identifiers.
+- method_links must contain exactly one entry per provided test_case_id, naming the JUnit method that implements it, with no shared methods and no entries for other cases.
+- Preserve real newline characters between statements and declarations. Do not return the file on a single line.
+- Braces must balance and the file must end fully closed.
+- Do not include Markdown code fences inside the content string.
+- Do not use build tools, test frameworks other than JUnit Jupiter, or external libraries.
+
+## Response Schema (JSON):
+{{
+    "test_class": {{
+        "content": "complete JUnit 5 test class source",
+        "method_links": [{{"test_case_id": "<id>", "method": "implementingMethodName"}}]
+    }}
+}}
+
+## Software Requirement:
+Title: {title}
+Description: {description}
+
+## Descriptive Test Cases (each has test_case_id, title, description, input, expected_output):
+{cases_json}
+
+## Production Source Files:
+{files_block}
+"""
+
+
 def get_code_improvement_prompt(
     title: str,
     description: str,

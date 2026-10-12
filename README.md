@@ -1,4 +1,4 @@
-# AI-Dev-Companion - Phases 1 to 8
+# AI-Dev-Companion - Phases 1 to 9
 
 
 This repository contains project and requirement setup, AI requirement analysis and confirmation, AI Java code generation, Java compilation, and real static/security analysis for confirmed requirements.
@@ -88,11 +88,67 @@ Environment variable:
 - `ENABLE_JAVA_EXECUTION=false` by default
 - Set it to `true` only when a real, secure sandboxed Java/JUnit execution environment is available.
 
+### Phase 9: Containerized JUnit Test Execution
+
+Descriptive test cases (Phase 6) are natural-language specifications — they are
+never executed directly. Phase 9 adds the full path from specification to real,
+verified test results:
+
+1. **Executable JUnit 5 test** — `POST /requirements/{rid}/executable-tests`
+   (author manually) or `POST .../executable-tests/generate` (Gemini drafts a
+   complete JUnit 5 class from the selected descriptive cases). Every stored
+   test carries a `method_map` (`test_case_id` → JUnit method); each requested
+   case needs its own declared `@Test` method.
+2. **Real execution** — `POST /requirements/{rid}/executions` with
+   `{artifact_id, test_case_ids, executable_test_id}` compiles the latest
+   version of every Java file of the requirement plus the test class, then runs
+   the JUnit Platform Console Launcher. Both steps happen **inside a
+   container**, never on the host.
+3. **Honest results** — pass/fail/skip/error counts come only from the
+   validated JUnit XML report and are mapped back onto the descriptive cases.
+   Compile failure, missing/malformed report, timeout, or an incomplete report
+   records `ERROR`, never guessed-at numbers. History is append-only; no run
+   overwrites an earlier run.
+
+**Safe execution boundary** (fixed, application-controlled): image
+`eclipse-temurin:21-jdk`; `--network=none --read-only --user 65534:65534
+--cap-drop=ALL --security-opt=no-new-privileges --pids-limit=128
+--memory=512m --memory-swap=512m --cpus=1.0 --init --tmpfs /tmp:rw,size=64m`;
+bind mounts limited to the workspace (read-only), the output dir (writable),
+and the JUnit jar (read-only); argument arrays only, no shell interpolation.
+
+**Setup** (see `backend/.env.example`):
+
+- `ENABLE_JAVA_EXECUTION` — `false` by default. With `false`, execution
+  requests persist a terminal `DISABLED` record (no run attempted). With
+  `true`, the backend probes the container runtime, daemon, runner image, and
+  JUnit jar on every request and fails closed with a terminal `ERROR` record
+  when anything is unavailable.
+- `EXECUTION_IMAGE=eclipse-temurin:21-jdk` (pull it once: `docker pull
+  eclipse-temurin:21-jdk`).
+- `JUNIT_CONSOLE_JAR` — `junit-platform-console-standalone-1.10.2.jar` in
+  `backend/.tools/` (gitignored; download once from Maven Central).
+- `EXECUTION_COMPILE_TIMEOUT_SECONDS=90`, `EXECUTION_TIMEOUT_SECONDS=120`.
+
+The coverage report (`GET /reports/coverage`) aggregates requirement linkage
+and real per-test outcomes across runs. Java source-code coverage is **not
+measured** (no JaCoCo integration) and is reported as `NOT_MEASURED` — the
+report never calls requirement↔test-case linkage "code coverage".
+
 ### Known Limitations
 
 - Local development can use Mock MongoDB (`mongomock_motor`) without Docker. Mock data may reset when the backend restarts. Real MongoDB requires appropriate configuration and a running database. Set `USE_MOCK_MONGO=false` when using a configured real MongoDB instance.
 - Java compilation requires a JDK with `javac` available on `PATH`.
 - Static analysis depends on Checkstyle, SpotBugs, and Semgrep being installed and configured. Checkstyle and SpotBugs may be installed under `backend/.tools` or configured through environment variables, while Semgrep must be available in the active Python environment.
-- Secure Docker-based sandbox execution is not configured. Java/JUnit execution is intentionally disabled unless a secure sandboxed execution mechanism is configured. Direct subprocess execution is not considered a secure sandbox.
-- AI-generated test cases are stored as natural-language validation specifications and require conversion to executable tests before automated test execution is possible.
+- Secure Docker-based sandbox execution backs the Phase 9 test runner when
+  `ENABLE_JAVA_EXECUTION=true` and the container runtime, runner image, and
+  JUnit jar are all available; otherwise execution records an explicit
+  `DISABLED`/`ERROR` state. Direct subprocess execution is not considered a
+  secure sandbox. Generated Java is never executed on the host.
+- AI-generated test cases are stored as natural-language validation
+  specifications; the Phase 9 executable-test workflow (manual or AI-drafted
+  JUnit 5 with an explicit `method_map`) converts them into runnable tests.
+- Java source-code coverage is not measured (no JaCoCo integration). The
+  coverage report aggregates requirement↔test-case linkage and real execution
+  outcomes only.
 - The execution workflow currently focuses on persistence and lifecycle management. Untrusted generated Java must not be executed directly on the host. Set `ENABLE_JAVA_EXECUTION=true` only after a real, secure isolated execution environment has been configured and verified.

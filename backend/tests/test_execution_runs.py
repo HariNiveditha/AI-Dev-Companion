@@ -49,6 +49,25 @@ def test_start_execution_disabled_by_default_returns_run_record(client):
             }
         )
     )
+    # Descriptive test cases are validated against the requirement, so the
+    # fixture must contain the cases the request refers to.
+    for case_id in ("case-1", "case-2"):
+        asyncio.run(
+            db.test_cases.insert_one(
+                {
+                    "test_case_id": case_id,
+                    "requirement_id": requirement_id,
+                    "project_id": "project-123",
+                    "title": f"Case {case_id}",
+                    "description": "Descriptive case",
+                    "input": "—",
+                    "expected_output": "—",
+                    "priority": "HIGH",
+                    "type": "FUNCTIONAL",
+                    "created_at": "2024-01-01T00:00:00",
+                }
+            )
+        )
 
     response = client.post(
         f"/requirements/{requirement_id}/executions",
@@ -96,9 +115,28 @@ def test_get_execution_results_returns_empty_list_for_created_run(client):
         )
     )
 
+    # Descriptive test cases are validated against the requirement,
+    # so the fixture must contain the case the request refers to.
+    asyncio.run(
+        db.test_cases.insert_one(
+            {
+                "test_case_id": "case-1",
+                "requirement_id": requirement_id,
+                "project_id": "project-123",
+                "title": "Reset case",
+                "description": "Descriptive case",
+                "input": "—",
+                "expected_output": "—",
+                "priority": "HIGH",
+                "type": "FUNCTIONAL",
+                "created_at": "2024-01-01T00:00:00",
+            }
+        )
+    )
+
     create_response = client.post(
         f"/requirements/{requirement_id}/executions",
-        json={"artifact_id": "artifact-2", "test_case_ids": []},
+        json={"artifact_id": "artifact-2", "test_case_ids": ["case-1"]},
     )
     execution_id = create_response.json()["execution_id"]
 

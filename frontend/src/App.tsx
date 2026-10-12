@@ -107,6 +107,25 @@ interface ExecutionTestResult {
   actual_output: string | null;
   error_details: string | null;
   duration_ms: number | null;
+  execution_id?: string | null;
+  method?: string | null;
+  test_case_id?: string | null;
+}
+
+interface ExecutionCounts {
+  total: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+  error: number;
+}
+
+interface ExecutionCompileResult {
+  status: 'PASSED' | 'FAILED' | 'ERROR';
+  exit_code: number | null;
+  stdout: string;
+  stderr: string;
+  duration_ms: number | null;
 }
 
 interface ExecutionRun {
@@ -126,6 +145,39 @@ interface ExecutionRun {
   updated_at: string;
   test_results: ExecutionTestResult[];
   error_message: string | null;
+  requested_test_case_ids?: string[];
+  source_snapshot?: {
+    artifact_id: string;
+    project_id: string;
+    requirement_id: string;
+    file_name: string;
+    version: number;
+    source: 'AI_GENERATED' | 'DEVELOPER_EDITED' | null;
+  }[];
+  executable_test_id?: string | null;
+  executable_test_version?: number | null;
+  executable_test_class?: string | null;
+  counts?: ExecutionCounts;
+  compile_result?: ExecutionCompileResult | null;
+  runner?: string | null;
+  runner_exit_code?: number | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  duration_ms?: number | null;
+}
+
+interface ExecutableTest {
+  executable_test_id: string;
+  project_id: string;
+  requirement_id: string;
+  class_name: string;
+  file_name: string;
+  content: string;
+  version: number;
+  method_map: Record<string, string>;
+  source: 'AI_GENERATED' | 'DEVELOPER_EDITED';
+  created_at: string;
+  updated_at: string;
 }
 
 interface CoverageReport {
@@ -138,6 +190,22 @@ interface CoverageReport {
   execution_status: string;
   execution_status_counts: Record<string, number>;
   note: string;
+  total_executable_tests?: number;
+  test_result_summary?: {
+    total: number;
+    passed: number;
+    failed: number;
+    skipped: number;
+    error: number;
+    executions_with_results: number;
+    scope: string;
+  };
+  code_coverage?: {
+    status: string;
+    percentage: number | null;
+    reason: string;
+  };
+  metrics?: Record<string, string>;
   project_id: string | null;
 }
 
@@ -241,7 +309,15 @@ function App() {
   const [generatingTestCasesId, setGeneratingTestCasesId] = useState<string | null>(null);
   const [testCasesByRequirement, setTestCasesByRequirement] = useState<Record<string, TestCase[]>>({});
   const [executionRunsByRequirement, setExecutionRunsByRequirement] = useState<Record<string, ExecutionRun[]>>({});
-  const [startingExecutionId, setStartingExecutionId] = useState<string | null>(null);
+
+  // Phase 9: executable JUnit tests + real test execution
+  const [executableTestsByRequirement, setExecutableTestsByRequirement] = useState<Record<string, ExecutableTest[]>>({});
+  const [selectedExecutableTestId, setSelectedExecutableTestId] = useState<string | null>(null);
+  const [executableTestDraft, setExecutableTestDraft] = useState('');
+  const [generatingExecutableTestId, setGeneratingExecutableTestId] = useState<string | null>(null);
+  const [savingExecutableTestId, setSavingExecutableTestId] = useState<string | null>(null);
+  const [runningExecutionId, setRunningExecutionId] = useState<string | null>(null);
+
   const [coverageReport, setCoverageReport] = useState<CoverageReport | null>(null);
   const [coverageLoading, setCoverageLoading] = useState(false);
 
@@ -325,6 +401,7 @@ function App() {
           } catch {
             setExecutionRunsByRequirement(current => ({ ...current, [requirement._id]: [] }));
           }
+          await fetchExecutableTests(requirement._id);
         }));
     } catch (err) {
       notifyError("Failed to load requirements.");
@@ -452,38 +529,144 @@ function App() {
     }
   };
 
-  const startExecution = async (requirement: Requirement) => {
-    const latestArtifacts = artifactsByRequirement[requirement._id] || [];
-    const latestArtifact = getLatestArtifacts(latestArtifacts)[0];
-    if (!latestArtifact) {
-      notifyError("Generate and save a Java artifact before starting an execution run.");
+  const fetchExecutableTests = async (requirementId: string) => {
+    try {
+      const res = await axios.get<ExecutableTest[]>(
+        `${API_URL}/requirements/${requirementId}/executable-tests`
+      );
+      setExecutableTestsByRequirement(current => ({
+        ...current,
+        [requirementId]: res.data,
+      }));
+      const latest = res.data[res.data.length - 1];
+      if (latest) {
+        setSelectedExecutableTestId(latest.executable_test_id);
+        setExecutableTestDraft(latest.content);
+      }
+    } catch {
+      setExecutableTestsByRequirement(current => ({
+        ...current,
+        [requirementId]: [],
+      }));
+    }
+  };
+
+  const generateExecutableTest = async (requirement: Requirement) => {
+    const cases = testCasesByRequirement[requirement._id] || [];
+    if (cases.length === 0) {
+      notifyError("Generate descriptive test cases first - an executable JUnit test implements them.");
       return;
     }
 
-    setStartingExecutionId(requirement._id);
+    setGeneratingExecutableTestId(requirement._id);
     try {
-      const res = await axios.post(`${API_URL}/requirements/${requirement._id}/executions`, {
-        artifact_id: latestArtifact.artifact_id,
-        test_case_ids: (testCasesByRequirement[requirement._id] || []).map(testCase => testCase.test_case_id),
-      });
+      const res = await axios.post<ExecutableTest>(
+        `${API_URL}/requirements/${requirement._id}/executable-tests/generate`,
+        { test_case_ids: cases.map(testCase => testCase.test_case_id) },
+      );
+      setExecutableTestsByRequirement(current => ({
+        ...current,
+        [requirement._id]: [...(current[requirement._id] || []), res.data],
+      }));
+      setSelectedExecutableTestId(res.data.executable_test_id);
+      setExecutableTestDraft(res.data.content);
+      notifySuccess(`Executable JUnit test generated (${res.data.class_name}).`);
+    } catch (err: any) {
+      if (!err.response) {
+        notifyError("Backend unavailable. Start the API and try again.");
+      } else {
+        notifyError(
+          err.response?.data?.detail ||
+            `Executable test generation failed (HTTP ${err.response?.status}).`,
+        );
+      }
+    } finally {
+      setGeneratingExecutableTestId(null);
+    }
+  };
+
+  const saveExecutableTest = async (requirement: Requirement) => {
+    if (!executableTestDraft.trim()) {
+      notifyError("Test source cannot be empty.");
+      return;
+    }
+    const current = (executableTestsByRequirement[requirement._id] || []).find(
+      test => test.executable_test_id === selectedExecutableTestId,
+    );
+    const methodMap = current?.method_map || {};
+
+    setSavingExecutableTestId(requirement._id);
+    try {
+      const res = await axios.post<ExecutableTest>(
+        `${API_URL}/requirements/${requirement._id}/executable-tests`,
+        { content: executableTestDraft, method_map: methodMap },
+      );
+      setExecutableTestsByRequirement(current => ({
+        ...current,
+        [requirement._id]: [...(current[requirement._id] || []), res.data],
+      }));
+      setSelectedExecutableTestId(res.data.executable_test_id);
+      notifySuccess(`Saved ${res.data.file_name} version ${res.data.version}.`);
+    } catch (err: any) {
+      notifyError(
+        err.response?.data?.detail || "Failed to save executable test.",
+      );
+    } finally {
+      setSavingExecutableTestId(null);
+    }
+  };
+
+  const runTests = async (requirement: Requirement) => {
+    const selected = (executableTestsByRequirement[requirement._id] || []).find(
+      test => test.executable_test_id === selectedExecutableTestId,
+    );
+    if (!selected) {
+      notifyError("Generate or select an executable JUnit test first.");
+      return;
+    }
+
+    const latestArtifacts = artifactsByRequirement[requirement._id] || [];
+    const latestArtifact = getLatestArtifacts(latestArtifacts)[0];
+    if (!latestArtifact) {
+      notifyError("Generate and save a Java artifact before running tests.");
+      return;
+    }
+
+    // Prevent accidental concurrent runs from repeated clicks.
+    setRunningExecutionId(requirement._id);
+    try {
+      const res = await axios.post<ExecutionRun>(
+        `${API_URL}/requirements/${requirement._id}/executions`,
+        {
+          artifact_id: latestArtifact.artifact_id,
+          test_case_ids: Object.keys(selected.method_map),
+          executable_test_id: selected.executable_test_id,
+        },
+      );
       setExecutionRunsByRequirement(current => ({
         ...current,
         [requirement._id]: [res.data, ...(current[requirement._id] || [])],
       }));
 
-      if (res.data.status === 'DISABLED') {
-        notifyError(res.data.error_message || 'Java/JUnit execution is disabled until a secure sandbox is configured.');
+      const counts = res.data.counts;
+      if (res.data.status === 'PASSED') {
+        notifySuccess(`Tests passed: ${counts?.passed ?? 0}/${counts?.total ?? 0}.`);
+      } else if (res.data.status === 'FAILED') {
+        notifyError(
+          `Tests failed: ${counts?.failed ?? 0} of ${counts?.total ?? 0}. See results below.`,
+        );
+      } else if (res.data.status === 'DISABLED' || res.data.status === 'ERROR') {
+        notifyError(res.data.error_message || `Execution ${res.data.status}.`);
       } else {
-        notifySuccess('Execution run started.');
+        notifySuccess(`Execution ${res.data.status}.`);
       }
     } catch (err: any) {
-      if (!err.response) {
-        notifyError('Backend unavailable. Start the API and try again.');
-      } else {
-        notifyError(err.response.data?.detail || `Execution start failed (HTTP ${err.response.status}).`);
-      }
+      notifyError(
+        err.response?.data?.detail ||
+          `Test execution failed (HTTP ${err.response?.status}).`,
+      );
     } finally {
-      setStartingExecutionId(null);
+      setRunningExecutionId(null);
     }
   };
 
@@ -829,7 +1012,7 @@ function App() {
                 <div className="coverage-report-header">
                   <div>
                     <h2>Coverage &amp; Quality Report</h2>
-                    <p>Requirement coverage and test execution overview.</p>
+                    <p>Requirement-to-test-case linkage and real test execution results. Java source-code coverage is not measured.</p>
                   </div>
                   <button
                     className="btn-secondary"
@@ -846,7 +1029,7 @@ function App() {
                   <>
                     <div className="coverage-metrics">
                       <div className="coverage-metric">
-                        <span>Requirement Coverage</span>
+                        <span>Requirement Coverage (linkage)</span>
                         <strong>{coverageReport.requirement_coverage_percentage}%</strong>
                       </div>
 
@@ -866,6 +1049,20 @@ function App() {
                       <div className="coverage-metric">
                         <span>Execution Runs</span>
                         <strong>{coverageReport.total_execution_runs}</strong>
+                      </div>
+
+                      {coverageReport.test_result_summary ? (
+                        <div className="coverage-metric">
+                          <span>Test Results (all runs)</span>
+                          <strong>
+                            {coverageReport.test_result_summary.passed}✓ / {coverageReport.test_result_summary.failed}✗ / {coverageReport.test_result_summary.skipped}– / {coverageReport.test_result_summary.error}!
+                          </strong>
+                        </div>
+                      ) : null}
+
+                      <div className="coverage-metric">
+                        <span>Code Coverage</span>
+                        <strong>Not measured</strong>
                       </div>
                     </div>
 
@@ -889,6 +1086,12 @@ function App() {
                     </div>
 
                     <p className="coverage-note">{coverageReport.note}</p>
+
+                    {coverageReport.code_coverage ? (
+                      <p className="coverage-note">
+                        <strong>Code coverage:</strong> {coverageReport.code_coverage.reason}
+                      </p>
+                    ) : null}
 
                     <div className="coverage-details">
                       <section>
@@ -1143,6 +1346,7 @@ function App() {
                           ) || latestArtifacts[0];
                           const generatedTestCases = testCasesByRequirement[r._id] || [];
                           const executionRuns = executionRunsByRequirement[r._id] || [];
+                          const executableTests = executableTestsByRequirement[r._id] || [];
 
                           return (
                             <div className="code-artifacts mt-3">
@@ -1200,14 +1404,68 @@ function App() {
 
                               <div className="execution-panel mt-4">
                                 <div className="code-artifacts-header">
-                                  <h4>Execution Runs</h4>
-                                  <button
-                                    className="btn-success"
-                                    onClick={() => startExecution(r)}
-                                    disabled={loading || startingExecutionId === r._id}
-                                  >
-                                    {startingExecutionId === r._id ? 'Starting...' : 'Start Execution'}
-                                  </button>
+                                  <h4>Executable JUnit Test</h4>
+                                  <div className="action-group">
+                                    <button
+                                      className="btn-primary"
+                                      onClick={() => generateExecutableTest(r)}
+                                      disabled={loading || generatingExecutableTestId === r._id}
+                                    >
+                                      {generatingExecutableTestId === r._id ? 'Generating...' : 'Generate JUnit Test'}
+                                    </button>
+                                    <button
+                                      className="btn-secondary"
+                                      onClick={() => saveExecutableTest(r)}
+                                      disabled={loading || savingExecutableTestId === r._id || !executableTestDraft.trim()}
+                                    >
+                                      {savingExecutableTestId === r._id ? 'Saving...' : 'Save New Version'}
+                                    </button>
+                                    <button
+                                      className="btn-success"
+                                      onClick={() => runTests(r)}
+                                      disabled={loading || runningExecutionId === r._id || !selectedExecutableTestId}
+                                    >
+                                      {runningExecutionId === r._id ? 'Running Tests...' : 'Run Tests'}
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {executableTests.length === 0 ? (
+                                  <p className="code-empty">
+                                    No executable JUnit test yet. Descriptive test cases are
+                                    not executable code — generate a JUnit 5 test that
+                                    implements them, then run it inside a secure container.
+                                  </p>
+                                ) : (
+                                  <>
+                                    <div className="code-file-list">
+                                      <h5>Executable Test Versions</h5>
+                                      {executableTests.map(test => (
+                                        <button
+                                          key={test.executable_test_id}
+                                          className={`version-button ${selectedExecutableTestId === test.executable_test_id ? 'active' : ''}`}
+                                          onClick={() => {
+                                            setSelectedExecutableTestId(test.executable_test_id);
+                                            setExecutableTestDraft(test.content);
+                                          }}
+                                        >
+                                          {test.file_name} v{test.version}
+                                          <span className="version-source">{test.source}</span>
+                                        </button>
+                                      ))}
+                                    </div>
+                                    <textarea
+                                      value={executableTestDraft}
+                                      onChange={event => setExecutableTestDraft(event.target.value)}
+                                      spellCheck={false}
+                                    />
+                                  </>
+                                )}
+                              </div>
+
+                              <div className="execution-panel mt-4">
+                                <div className="code-artifacts-header">
+                                  <h4>Test Execution History</h4>
                                 </div>
 
                                 {executionRuns.length === 0 ? (
@@ -1220,29 +1478,71 @@ function App() {
                                           <h5>{run.execution_id}</h5>
                                           <span className="tag status">{run.status}</span>
                                         </div>
-                                        <p><strong>Artifact:</strong> {run.artifact.file_name} (v{run.artifact.version})</p>
-                                        {run.error_message && <p><strong>Message:</strong> {run.error_message}</p>}
+                                        <p>
+                                          <strong>Artifact:</strong> {run.artifact.file_name} (v{run.artifact.version})
+                                          {run.executable_test_class ? ` · Test: ${run.executable_test_class}` : ''}
+                                        </p>
+                                        {run.runner ? <p><strong>Runner:</strong> {run.runner}</p> : null}
+                                        {run.duration_ms !== null && run.duration_ms !== undefined ? (
+                                          <p><strong>Duration:</strong> {run.duration_ms} ms</p>
+                                        ) : null}
+                                        {run.counts ? (
+                                          <p className="exec-counts">
+                                            <strong>Results:</strong> {run.counts.passed} passed · {run.counts.failed} failed · {run.counts.skipped} skipped · {run.counts.error} errors (total {run.counts.total})
+                                          </p>
+                                        ) : null}
+                                        {run.compile_result && run.compile_result.status !== 'PASSED' ? (
+                                          <div className="compile-result failed">
+                                            <strong>Compilation {run.compile_result.status}</strong>
+                                            {run.compile_result.stderr ? <pre>{run.compile_result.stderr}</pre> : null}
+                                          </div>
+                                        ) : null}
+                                        {run.error_message ? (
+                                          <p className="exec-error">
+                                            <strong>{run.status === 'ERROR' ? 'Runner / infrastructure error' : 'Message'}:</strong> {run.error_message}
+                                          </p>
+                                        ) : null}
+                                        {run.source_snapshot && run.source_snapshot.length > 0 ? (
+                                          <p className="code-empty">
+                                            Source snapshot: {run.source_snapshot.map(f => `${f.file_name} v${f.version}`).join(', ')}
+                                          </p>
+                                        ) : null}
                                         {run.test_results.length === 0 ? (
-                                          <p className="code-empty">No individual test results recorded yet.</p>
+                                          <p className="code-empty">No individual test results recorded.</p>
                                         ) : (
                                           <table className="test-case-table">
                                             <thead>
                                               <tr>
                                                 <th>Test</th>
+                                                <th>Method</th>
                                                 <th>Status</th>
                                                 <th>Expected</th>
-                                                <th>Actual</th>
                                                 <th>Duration</th>
+                                                <th>Details</th>
                                               </tr>
                                             </thead>
                                             <tbody>
                                               {run.test_results.map(result => (
                                                 <tr key={`${run.execution_id}-${result.test_id}`}>
-                                                  <td>{result.title}</td>
+                                                  <td>
+                                                    {result.title}
+                                                    {result.test_case_id ? (
+                                                      <span className="coverage-id"> {result.test_case_id}</span>
+                                                    ) : null}
+                                                  </td>
+                                                  <td>{result.method || '—'}</td>
                                                   <td>{result.status}</td>
                                                   <td>{result.expected_output || '—'}</td>
-                                                  <td>{result.actual_output || '—'}</td>
-                                                  <td>{result.duration_ms !== null ? `${result.duration_ms} ms` : '—'}</td>
+                                                  <td>{result.duration_ms !== null && result.duration_ms !== undefined ? `${result.duration_ms} ms` : '—'}</td>
+                                                  <td>
+                                                    {result.error_details ? (
+                                                      <span title={result.error_details}>
+                                                        {result.error_details.length > 60
+                                                          ? `${result.error_details.slice(0, 60)}…`
+                                                          : result.error_details}
+                                                      </span>
+                                                    ) : '—'}
+                                                  </td>
                                                 </tr>
                                               ))}
                                             </tbody>
@@ -1253,6 +1553,7 @@ function App() {
                                   </div>
                                 )}
                               </div>
+
 
                               {latestArtifacts.length === 0 ? (
                                 <p className="code-empty">No generated files yet.</p>

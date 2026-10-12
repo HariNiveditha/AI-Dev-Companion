@@ -1032,3 +1032,7 @@ body {
     width: 100%;
   }
 }
+/* Phase 9 test execution */
+.exec-counts { margin: 0.25rem 0; }
+.exec-error { margin: 0.25rem 0; color: #b91c1c; }
+

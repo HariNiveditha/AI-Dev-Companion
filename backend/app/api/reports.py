@@ -45,12 +45,19 @@ async def get_coverage_report(
         execution_runs,
     )
 
+    executable_tests = []
+    if requirement_ids:
+        executable_tests = await db.executable_tests.find(
+            {"requirement_id": {"$in": requirement_ids}}
+        ).to_list(10000)
+
     status_counts = {}
     for run in execution_runs:
         status = str(run.get("status", "UNKNOWN")).upper()
         status_counts[status] = status_counts.get(status, 0) + 1
 
     report["execution_status_counts"] = status_counts
+    report["total_executable_tests"] = len(executable_tests)
     report["project_id"] = project_id
 
     return report
