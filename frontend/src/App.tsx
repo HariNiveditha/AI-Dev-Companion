@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useGitRepository } from './components/GitRepository';
 import axios from 'axios';
 import './App.css';
 
@@ -1000,6 +1001,11 @@ function App() {
     fetchProjects();
   }, []);
 
+  const git = useGitRepository(selectedProject?._id || null, {
+    onSuccess: notifySuccess,
+    onError: notifyError,
+  });
+
   return (
     <div className="layout">
       {/* Sidebar */}
@@ -1033,6 +1039,11 @@ function App() {
               </button>
             ))}
           </div>
+          <button
+            className={`nav-item ${selectedProject ? 'active' : ''}`}
+            onClick={() => { setShowCreateProject(false); setSelectedProject(null); }}>
+            Git Repository
+          </button>
         </nav>
       </aside>
 
@@ -2170,6 +2181,200 @@ function App() {
                     ))}
                   </ul>
                 )}
+
+
+                {/* Git/Repository Section */}
+                <div className="card mt-4">
+                  <div className="coverage-report-header">
+                    <div>
+                      <h2>Git Repository</h2>
+                      <p>Manage the source code repository for your project.</p>
+                    </div>
+                  </div>
+
+                  {/* Initialize/Connect Controls */}
+                  {selectedProject && (
+                    <div className="git-controls">
+                      {git.state.isInitialized || (git.state.status && git.state.status.is_repo) ? (
+                        <div className="git-initialized-badge">
+                          <span className="badge badge-success">✓ Repository Initialized</span>
+                        </div>
+                      ) : (
+                        <button
+                          className="btn-primary mt-2"
+                          onClick={() => git.fetchInit()}
+                          disabled={git.state.loading}
+                        >
+                          {git.state.loading ? 'Initializing Repository...' : 'Initialize Repository'}
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {selectedProject && git.state.isConnected && (
+                    <p>Connected to Git repository</p>
+                  )}
+
+                  {/* Repository Status */}
+                  {selectedProject && git.state.status && git.state.status.is_repo ? (
+                    <div className="git-status-panel">
+                      <div className="git-header">
+                        <h3>Repository Status</h3>
+                        <span className="git-branch">Branch: {git.state.status.branch}</span>
+                      </div>
+
+                      <div className="git-status-info">
+                        <p>{git.state.status.is_clean ? 'Working tree is clean' : 'Working tree is dirty'}</p>
+
+                        {git.state.status.modified_files.length > 0 && (
+                          <div className="git-panel-section">
+                            <h5>Modified Files</h5>
+                            <ul>
+                              {git.state.status.modified_files.map((f: string) => (
+                                <li key={f}>{f}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+
+                        {git.state.status.added_files.length > 0 && (
+                          <div className="git-panel-section">
+                            <h5>Added Files</h5>
+                            <ul>
+                              {git.state.status.added_files.map((f: string) => (
+                                <li key={f}>{f}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+
+                        {git.state.status.deleted_files.length > 0 && (
+                          <div className="git-panel-section">
+                            <h5>Deleted Files</h5>
+                            <ul>
+                              {git.state.status.deleted_files.map((f: string) => (
+                                <li key={f}>{f}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+
+                        {git.state.status.untracked_files.length > 0 && (
+                          <div className="git-panel-section">
+                            <h5>Untracked Files</h5>
+                            <ul>
+                              {git.state.status.untracked_files.map((f: string) => (
+                                <li key={f}>{f}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="git-latest-commit">
+                        {git.state.status.latest_commit && git.state.status.latest_commit.message ? (
+                          <div>
+                            <strong>Latest Commit:</strong> {git.state.status.latest_commit.message}
+                            <br />
+                            <small>Author: {git.state.status.latest_commit.author || 'Unknown'} & {git.state.status.latest_commit.date || ''}</small>
+                          </div>
+                        ) : (
+                          <p>No commits yet.</p>
+                        )}
+                      </div>
+                    </div>
+                  ) : selectedProject && (
+                    <div className="git-status-empty">
+                      <p>Initialize a Git repository to view repository status.</p>
+                    </div>
+                  )}
+
+                  {/* Stage/Unstaged Files */}
+                  {selectedProject && git.state.status && git.state.status.is_repo && (
+                    <div className="git-changes">
+                      <h5>Changes</h5>
+                      <div className="git-changes-grid">
+                        <div>
+                          <h6>Staged</h6>
+                          <p>{git.state.status.staged_diff_stat || (git.state.status.staged_diff ? 'Changes staged' : 'No staged changes')}</p>
+                          <button
+                            className="btn-secondary small"
+                            onClick={() => git.fetchStage([])}
+                            disabled={git.state.loading || (!git.state.status.modified_files.length && !git.state.status.added_files.length && !git.state.status.deleted_files.length && !git.state.status.untracked_files.length)}
+                          >
+                            Stage All
+                          </button>
+                        </div>
+                        <div>
+                          <h6>Unstaged</h6>
+                          <p>{git.state.status.unstaged_diff ? (git.state.status.unstaged_diff.substring(0, 100) + (git.state.status.unstaged_diff.length > 100 ? '...' : '')) : (git.state.status.untracked_files.length > 0 ? `${git.state.status.untracked_files.length} untracked file(s)` : 'No unstaged changes')}</p>
+                          <button
+                            className="btn-secondary small"
+                            onClick={() => git.fetchUnstage([])}
+                            disabled={git.state.loading || (!git.state.status.staged_diff && !git.state.status.staged_diff_stat)}
+                          >
+                            Unstage All
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Commit Section - only rendered after repository is initialized */}
+                  {selectedProject && git.state.status && git.state.status.is_repo && (
+                    <div className="git-commit">
+                      <h5>Create Commit</h5>
+                      <div className="git-commit-input">
+                        <input
+                          type="text"
+                          value={git.state.commitMessage}
+                          onChange={e => git.setState(prev => ({ ...prev, commitMessage: e.target.value }))}
+                          placeholder="Enter commit message"
+                          disabled={git.state.loading}
+                        />
+                        <button
+                          className="btn-primary"
+                          onClick={() => git.fetchCommit()}
+                          disabled={!git.state.commitMessage.trim() || git.state.loading}
+                        >
+                          {git.state.loading ? 'Creating...' : 'Commit'}
+                        </button>
+                      </div>
+                      {git.state.showCommitConfirmation && (
+                        <div className="git-commit-confirm">
+                          <p>Create commit with message: "{git.state.commitMessage}"?</p>
+                          <button className="btn-primary" onClick={() => git.confirmCommit()} disabled={git.state.loading}>Commit</button>
+                          <button className="btn-secondary" onClick={() => git.setState(prev => ({ ...prev, showCommitConfirmation: false }))} disabled={git.state.loading}>Cancel</button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Commit History */}
+                  {selectedProject && git.state.status && git.state.status.is_repo && git.state.commits.length > 0 && (
+                    <div className="git-history">
+                      <h5>Commit History</h5>
+                      <ul>
+                        {git.state.commits.map((commit, i) => (
+                          <li key={i} onClick={() => git.fetchCommitDetails(commit.hash)}>
+                            <strong>{commit.hash.substring(0, 7)}</strong> {commit.message}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Diff View */}
+                  {git.state.showDiff && git.state.diffContent && (
+                    <div className="git-diff-view">
+                      <h5>Diff</h5>
+                      <div className="diff-scroll">
+                        <pre>{git.state.diffContent}</pre>
+                      </div>
+                      <button className="btn-secondary" onClick={() => git.setState(prev => ({ ...prev, showDiff: false }))}>Close</button>
+                    </div>
+                  )}
+                </div>
 
                 <div className="add-req-form mt-4">
                   <h3>Add New Requirement</h3>

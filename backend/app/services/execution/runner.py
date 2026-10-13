@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from dotenv import load_dotenv
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -32,6 +33,7 @@ from app.services.execution.junit_report import (
 from app.services.execution.workspace import ExecutionWorkspace, WorkspaceError, build_workspace
 
 APP_ROOT = Path(__file__).resolve().parents[3]
+load_dotenv(APP_ROOT / ".env")
 
 DEFAULT_IMAGE = "eclipse-temurin:21-jdk"
 DEFAULT_JUNIT_JAR = APP_ROOT / ".tools" / "junit-platform-console-standalone-1.10.2.jar"

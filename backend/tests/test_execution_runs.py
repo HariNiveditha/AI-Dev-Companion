@@ -7,8 +7,16 @@ from app.db.mongodb import get_db
 from app.main import app
 
 
+from app.services.execution import runner
+
+
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    monkeypatch.setattr(
+        runner,
+        "check_availability",
+        lambda: runner.Availability(available=False, reason="Secure sandbox runner is disabled by default", runner_label=""),
+    )
     with TestClient(app) as test_client:
         db = get_db()
         asyncio.run(db.executions.delete_many({}))

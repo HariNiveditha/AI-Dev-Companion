@@ -37,7 +37,7 @@ async def connect_to_mongo():
     global client, db
     if USE_MOCK:
         client = AsyncMongoMockClient()
-        print("⚠️  Using in-memory Mock MongoDB (USE_MOCK_MONGO=true) — data is NOT persisted.")
+        print("WARNING: Using in-memory Mock MongoDB (USE_MOCK_MONGO=true) - data is NOT persisted.")
     else:
         client = AsyncIOMotorClient(
             MONGO_URI,
