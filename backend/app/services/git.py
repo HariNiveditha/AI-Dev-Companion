@@ -6,6 +6,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from fastapi import HTTPException
 
+from app.db.mongodb import get_db
+from app.models.code_artifact import CodeArtifact
+
 APP_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -18,6 +21,49 @@ def _ensure_git_available() -> None:
     """Verify git is available; raise HTTPException if not."""
     if shutil_which("git") is None:
         raise HTTPException(status_code=503, detail="Git is not installed on this system.")
+
+
+async def _sync_artifacts_to_workspace(project_id: str) -> None:
+    """Synchronize generated Java artifacts into the project workspace.
+
+    Materializes the latest version of each Java source file from the
+    code_artifacts MongoDB collection into the project's workspace directory
+    so that Git operations can track them. Silently skips if the database
+    is not available.
+    """
+    db = get_db()
+    if db is None:
+        return
+
+    workspace_root = APP_ROOT / "projects" / project_id
+    workspace_root.mkdir(parents=True, exist_ok=True)
+
+    # Use the async MongoDB driver's find/to_list properly
+    try:
+        artifacts = await db.code_artifacts.find({"project_id": project_id}).sort(
+            "version", -1
+        ).to_list(None)
+    except Exception:
+        # Fallback: if the database operation fails, skip sync gracefully
+        return
+
+    written_files: set[str] = set()
+
+    for artifact in artifacts:
+        file_name = artifact.get("file_name", "")
+        if not file_name or not file_name.endswith(".java"):
+            continue
+
+        if file_name in written_files:
+            continue
+        written_files.add(file_name)
+
+        file_path = workspace_root / file_name
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+
+        content = artifact.get("content", "")
+        if content.strip():
+            file_path.write_text(content, encoding="utf-8")
 
 
 def _resolve_workspace_path(project_id: str, path: Union[str, Path] = "") -> Path:
@@ -49,7 +95,7 @@ def _resolve_workspace_path(project_id: str, path: Union[str, Path] = "") -> Pat
 def _run_git(
     project_id: str,
     *args: str,
-    cwd: Optional[Union[str, Path]] = None,
+    cwd: Optional[str] = None,
     timeout_seconds: int = 30,
 ) -> subprocess.CompletedProcess:
     """Run a git command safely with argument arrays (no shell=True).
@@ -125,13 +171,19 @@ def _is_git_repo(project_id: str, path: Union[str, Path] = "") -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Public API functions
+# Public API functions (async)
 # ---------------------------------------------------------------------------
 
 
-def init_repo(project_id: str, workspace_path: str = "") -> Dict[str, Any]:
-    """Initialize a new Git repository in the project workspace."""
-    _ensure_git_available()
+async def init_repo(project_id: str, workspace_path: str = "") -> Dict[str, Any]:
+    """Initialize a new Git repository in the project workspace.
+
+    The repo is initialized at the project's authorized workspace directory.
+    If a repo already exists, this is reported safely without error.
+
+    Synchronizes MongoDB artifacts to the workspace before initialization.
+    """
+    await _sync_artifacts_to_workspace(project_id)
 
     target = _resolve_workspace_path(project_id, workspace_path or ".")
     target.mkdir(parents=True, exist_ok=True)
@@ -159,9 +211,9 @@ def init_repo(project_id: str, workspace_path: str = "") -> Dict[str, Any]:
     }
 
 
-def connect_repo(project_id: str, workspace_path: str = "") -> Dict[str, Any]:
+async def connect_repo(project_id: str, workspace_path: str = "") -> Dict[str, Any]:
     """Connect to an existing local Git repository at the given workspace path."""
-    _ensure_git_available()
+    await _sync_artifacts_to_workspace(project_id)
 
     target = _resolve_workspace_path(project_id, workspace_path or ".")
 
@@ -178,9 +230,15 @@ def connect_repo(project_id: str, workspace_path: str = "") -> Dict[str, Any]:
     }
 
 
-def get_repo_status(project_id: str, workspace_path: str = "") -> Dict[str, Any]:
-    """Get the current Git repository status."""
-    _ensure_git_available()
+async def get_repo_status(project_id: str, workspace_path: str = "") -> Dict[str, Any]:
+    """Get the current Git repository status.
+
+    Includes: current branch, clean/dirty state, modified/added/deleted/untracked files,
+    staged/unstaged diffs, and latest commit information.
+
+    Synchronizes MongoDB artifacts to the workspace before status check.
+    """
+    await _sync_artifacts_to_workspace(project_id)
 
     base = _resolve_workspace_path(project_id, workspace_path or ".")
 
@@ -306,9 +364,9 @@ def get_repo_status(project_id: str, workspace_path: str = "") -> Dict[str, Any]
     }
 
 
-def get_diff(
+async def get_diff(
     project_id: str,
-    source: str = "HEAD",
+    source: Optional[str] = "HEAD",
     target: Optional[str] = None,
     staging: bool = False,
 ) -> Dict[str, Any]:
@@ -336,9 +394,9 @@ def get_diff(
     }
 
 
-def stage_files(project_id: str, file_paths: Optional[List[str]] = None) -> Dict[str, Any]:
+async def stage_files(project_id: str, file_paths: Optional[List[str]] = None) -> Dict[str, Any]:
     """Stage specified files or all files if list is empty."""
-    _ensure_git_available()
+    await _sync_artifacts_to_workspace(project_id)
     workspace_root = (APP_ROOT / "projects" / project_id).resolve()
 
     if not _is_git_repo(project_id, "."):
@@ -377,9 +435,9 @@ def stage_files(project_id: str, file_paths: Optional[List[str]] = None) -> Dict
     }
 
 
-def unstage_files(project_id: str, file_paths: Optional[List[str]] = None) -> Dict[str, Any]:
+async def unstage_files(project_id: str, file_paths: Optional[List[str]] = None) -> Dict[str, Any]:
     """Unstage specified files or all files if list is empty."""
-    _ensure_git_available()
+    await _sync_artifacts_to_workspace(project_id)
     workspace_root = (APP_ROOT / "projects" / project_id).resolve()
 
     if not _is_git_repo(project_id, "."):
@@ -418,13 +476,19 @@ def unstage_files(project_id: str, file_paths: Optional[List[str]] = None) -> Di
     }
 
 
-def create_commit(
+async def create_commit(
     project_id: str,
     message: str,
     file_paths: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """Create a commit with the given message."""
-    _ensure_git_available()
+    """Create a commit with the given message.
+
+    If file_paths are specified, only those files are included in the commit.
+    If no files are specified, all staged changes are committed.
+
+    Synchronizes MongoDB artifacts to the workspace before committing.
+    """
+    await _sync_artifacts_to_workspace(project_id)
 
     if not message or not message.strip():
         raise HTTPException(status_code=400, detail="Commit message is required.")
@@ -435,7 +499,7 @@ def create_commit(
     workspace_root = (APP_ROOT / "projects" / project_id).resolve()
 
     if file_paths:
-        stage_files(project_id, file_paths)
+        await stage_files(project_id, file_paths)
 
     result = _run_git(project_id, "commit", "-m", message.strip(), cwd=str(workspace_root))
     if result.returncode != 0:
@@ -460,12 +524,17 @@ def create_commit(
     }
 
 
-def get_commit_history(
+async def get_commit_history(
     project_id: str,
     max_count: int = 20,
 ) -> Dict[str, Any]:
-    """Get the recent commit history."""
-    _ensure_git_available()
+    """Get the recent commit history.
+
+    Returns a list of commits with hash, author, date, and message.
+
+    Synchronizes MongoDB artifacts to the workspace before fetching history.
+    """
+    await _sync_artifacts_to_workspace(project_id)
     workspace_root = (APP_ROOT / "projects" / project_id).resolve()
 
     if not _is_git_repo(project_id, "."):
@@ -493,6 +562,7 @@ def get_commit_history(
                 project_id, "show", "--format=%ai", "--no-patch", "-s", f"{commit_hash}^!",
                 cwd=str(workspace_root),
             )
+
             author = author_result.stdout.strip() if author_result.returncode == 0 else "unknown"
             date = date_result.stdout.strip() if date_result.returncode == 0 else "unknown"
 
@@ -509,7 +579,7 @@ def get_commit_history(
     }
 
 
-def get_commit_details(
+async def get_commit_details(
     project_id: str,
     commit_hash: str,
 ) -> Dict[str, Any]:
@@ -532,10 +602,12 @@ def get_commit_details(
         project_id, "show", "--format=", "--stat", commit_hash,
         cwd=str(workspace_root),
     )
+
     changed_files_result = _run_git(
         project_id, "show", "--format=", "--name-only", commit_hash,
         cwd=str(workspace_root),
     )
+
     full_diff_result = _run_git(
         project_id, "show", commit_hash,
         cwd=str(workspace_root),

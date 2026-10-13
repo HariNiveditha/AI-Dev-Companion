@@ -66,7 +66,7 @@ async def api_init_repo(project_id: str):
     If a repo already exists, this is reported safely without error.
     """
     project_id = await _get_project_id(project_id)
-    result = init_repo(project_id)
+    result = await init_repo(project_id)
     return result
 
 
@@ -79,7 +79,7 @@ async def api_connect_repo(
     """Connect to an existing local Git repository."""
     project_id = await _get_project_id(project_id)
     path = (payload.workspace_path if payload and payload.workspace_path else workspace_path) or ""
-    result = connect_repo(project_id, path)
+    result = await connect_repo(project_id, path)
     return result
 
 
@@ -91,7 +91,7 @@ async def api_repo_status(project_id: str):
     staged/unstaged diffs, and latest commit information.
     """
     project_id = await _get_project_id(project_id)
-    status = get_repo_status(project_id)
+    status = await get_repo_status(project_id)
     return status
 
 
@@ -108,7 +108,7 @@ async def api_get_diff(
     src = (payload.source if payload and payload.source else source) or "HEAD"
     tgt = payload.target if (payload and payload.target is not None) else target
     stg = payload.staging if (payload and payload.staging is not None) else (staging if staging is not None else False)
-    diff = get_diff(project_id, source=src, target=tgt, staging=stg)
+    diff = await get_diff(project_id, source=src, target=tgt, staging=stg)
     return diff
 
 
@@ -125,7 +125,7 @@ async def api_stage_files(
         paths = payload.file_paths
     else:
         paths = []
-    staged = stage_files(project_id, paths)
+    staged = await stage_files(project_id, paths)
     return staged
 
 
@@ -142,7 +142,7 @@ async def api_unstage_files(
         paths = payload.file_paths
     else:
         paths = []
-    unstaged = unstage_files(project_id, paths)
+    unstaged = await unstage_files(project_id, paths)
     return unstaged
 
 
@@ -156,7 +156,7 @@ async def api_create_commit(
     project_id = await _get_project_id(project_id)
     msg = (payload.message if payload and payload.message else message) or ""
     fps = payload.file_paths if payload else None
-    committed = create_commit(project_id, msg, fps)
+    committed = await create_commit(project_id, msg, fps)
     return committed
 
 
@@ -167,7 +167,7 @@ async def api_commit_history(project_id: str, max_count: int = 20):
     Returns commits with hash, author, date, and message.
     """
     project_id = await _get_project_id(project_id)
-    history = get_commit_history(project_id, max_count=max_count)
+    history = await get_commit_history(project_id, max_count=max_count)
     return history
 
 
@@ -178,5 +178,5 @@ async def api_commit_details(
 ):
     """Get details of a specific commit, including changed files and diff."""
     project_id = await _get_project_id(project_id)
-    details = get_commit_details(project_id, commit_hash)
+    details = await get_commit_details(project_id, commit_hash)
     return details

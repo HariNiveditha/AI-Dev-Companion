@@ -1,14 +1,32 @@
+
+# Python
 **/__pycache__/
+*.py[cod]
+.pytest_cache/
 backend/venv/
+.venv/
+
+# Backend tools
 backend/.tools/
 
-backend/.env
-frontend/node_modules/
-frontend/.env
-*.log
-.DS_Store
-
-__pycache__/
-*.py[cod]
+# Environment variables and secrets
 .env
+.env.*
+!.env.example
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Generated project repositories
 backend/projects/
+
+# Logs
+*.log
+
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
